@@ -230,7 +230,8 @@ class VideoSequenceDataGenerator(KerasSequence):
         # On pourrait fournir des "dummy" labels pour la sortie FOMO si la compilation l'exige.
         # Ici, on suppose que la compilation du modèle combiné pour la phase 2
         # ne spécifiera une perte que pour la sortie 'motion_output'.
-        return np.array(batch_sequences), np.array(batch_motion_labels)
+        # Retourner les étiquettes comme un dictionnaire pour correspondre aux noms des sorties du modèle.
+        return np.array(batch_sequences), {'motion_output': np.array(batch_motion_labels)}
 
     def on_epoch_end(self):
         if self.shuffle:
