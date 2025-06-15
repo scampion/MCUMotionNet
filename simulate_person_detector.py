@@ -76,40 +76,59 @@ def postprocess_heatmap(heatmap, original_frame_shape, grid_shape, person_class_
                 center_x_orig = int(center_x_norm * frame_w)
                 center_y_orig = int(center_y_norm * frame_h)
                 
-                detected_centroids.append((center_x_orig, center_y_orig, confidence))
+                # Retourner aussi les coordonnées de la grille (r, c)
+                detected_centroids.append((center_x_orig, center_y_orig, confidence, r, c))
                 
     return detected_centroids
 
-def compute_optical_flow(prev_centroids_data, current_centroids_data, centroid_matching_threshold):
+def compute_optical_flow(prev_centroids_data_with_grid, current_centroids_data_with_grid, grid_shape):
     """
-    Calcule le flux optique simple basé sur l'appariement des centroïdes.
-    Retourne les paires de centroïdes appariés et les déplacements horizontaux.
+    Calcule le flux optique basé sur la disparition/apparition de centroïdes dans les cellules de la grille.
+    Retourne les paires de points de flux et les déplacements horizontaux.
+    prev_centroids_data_with_grid: liste de (x, y, conf, r_grid, c_grid) de l'image N-1
+    current_centroids_data_with_grid: liste de (x, y, conf, r_grid, c_grid) de l'image N
+    grid_shape: (GRID_HEIGHT, GRID_WIDTH)
     """
     horizontal_displacements = []
-    matched_pairs = [] # Liste pour stocker les paires ((px, py), (cx, cy))
-    
-    if prev_centroids_data and current_centroids_data:
-        # Créer une liste de booléens pour marquer les centroïdes précédents comme utilisés
-        # pour éviter qu'un centroïde précédent soit apparié à plusieurs centroïdes courants.
-        # Optionnel, mais peut améliorer la logique d'appariement si nécessaire.
-        # Pour l'instant, on garde l'appariement simple au plus proche.
+    matched_pairs = []
+    grid_h, grid_w = grid_shape
 
-        for curr_idx, (cx, cy, cconf) in enumerate(current_centroids_data):
-            best_match_prev_c_data = None
-            min_dist = float('inf')
+    prev_grid_map = {(r, c): (x, y, conf) for x, y, conf, r, c in prev_centroids_data_with_grid}
+    current_grid_map = {(r, c): (x, y, conf) for x, y, conf, r, c in current_centroids_data_with_grid}
+
+    prev_occupied_cells = set(prev_grid_map.keys())
+    current_occupied_cells = set(current_grid_map.keys())
+
+    disappeared_cells = prev_occupied_cells - current_occupied_cells
+    appeared_cells = current_occupied_cells - prev_occupied_cells
+
+    for prev_r, prev_c in disappeared_cells:
+        prev_x, prev_y, _ = prev_grid_map[(prev_r, prev_c)]
+        
+        neighboring_appeared_centroids_coords = []
+        # Définir les 8 voisins (incluant diagonales)
+        for dr in [-1, 0, 1]:
+            for dc in [-1, 0, 1]:
+                if dr == 0 and dc == 0:
+                    continue # Cellule elle-même
+                
+                neighbor_r, neighbor_c = prev_r + dr, prev_c + dc
+                
+                if 0 <= neighbor_r < grid_h and 0 <= neighbor_c < grid_w:
+                    if (neighbor_r, neighbor_c) in appeared_cells:
+                        # Ce voisin est une cellule nouvellement apparue
+                        new_x, new_y, _ = current_grid_map[(neighbor_r, neighbor_c)]
+                        neighboring_appeared_centroids_coords.append((new_x, new_y))
+        
+        if neighboring_appeared_centroids_coords:
+            # Calculer le centroïde moyen des voisins apparus
+            avg_new_x = sum(c[0] for c in neighboring_appeared_centroids_coords) / len(neighboring_appeared_centroids_coords)
+            avg_new_y = sum(c[1] for c in neighboring_appeared_centroids_coords) / len(neighboring_appeared_centroids_coords)
             
-            for prev_idx, (px, py, pconf) in enumerate(prev_centroids_data):
-                dist = math.sqrt((cx - px)**2 + (cy - py)**2)
-                if dist < min_dist and dist < centroid_matching_threshold:
-                    min_dist = dist
-                    best_match_prev_c_data = (px, py) # Stocker uniquement les coordonnées
+            dx = avg_new_x - prev_x
+            horizontal_displacements.append(dx)
+            matched_pairs.append(((prev_x, prev_y), (avg_new_x, avg_new_y)))
             
-            if best_match_prev_c_data:
-                prev_x, prev_y = best_match_prev_c_data
-                dx = cx - prev_x
-                horizontal_displacements.append(dx)
-                matched_pairs.append(((prev_x, prev_y), (cx, cy)))
-                                
     return matched_pairs, horizontal_displacements
 
 def draw_optical_flow_arrows(display_frame, matched_pairs):
@@ -205,10 +224,12 @@ def main():
             current_centroids_data = centroids # centroids est une liste de (x, y, confidence)
 
             # Calculer le flux optique
+            # current_centroids_data contient maintenant (x, y, conf, r_grid, c_grid)
+            # prev_centroids_data doit aussi suivre ce format
             matched_centroid_pairs, horizontal_displacements = compute_optical_flow(
-                prev_centroids_data,
-                current_centroids_data,
-                CENTROID_MATCHING_THRESHOLD_DISTANCE
+                prev_centroids_data, # Doit être une liste de (x,y,conf,r,c)
+                current_centroids_data, # Est déjà une liste de (x,y,conf,r,c)
+                (GRID_HEIGHT, GRID_WIDTH)
             )
 
             # Dessiner les flèches de flux optique (pour le débogage)
@@ -242,9 +263,10 @@ def main():
                 # camera_pan_prediction = "Panoramique Camera: N/A (pas de suivi)"
                 pass # Garde la prediction precedente si pas de nouvelles donnees
 
-            prev_centroids_data = list(current_centroids_data) # Copie pour la prochaine itération
+            prev_centroids_data = list(current_centroids_data) # Copie pour la prochaine itération, current_centroids_data contient (x,y,conf,r,c)
 
-            for (x, y, conf) in centroids:
+            # centroids est une liste de (x, y, conf, r, c)
+            for (x, y, conf, r_grid, c_grid) in centroids: # Dépaqueter r_grid, c_grid même si non utilisés ici
                 cv2.circle(display_frame, (x, y), 10, (0, 255, 0), 2) # Cercle vert
                 cv2.putText(display_frame, f"{conf:.2f}", (x + 10, y - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
