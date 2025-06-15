@@ -167,7 +167,7 @@ class VideoSequenceDataGenerator(KerasSequence):
         if self.shuffle:
             np.random.shuffle(self.indexes)
 
-    @memory.cache()
+    
     def _extract_sequences_from_videos(self):
         all_sequences_with_labels = []
         print("Extraction des séquences et génération des étiquettes auto-supervisées...")
