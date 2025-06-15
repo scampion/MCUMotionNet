@@ -213,7 +213,7 @@ if __name__ == '__main__':
     # Example parameters
     INPUT_HEIGHT = 96
     INPUT_WIDTH = 96
-    INPUT_CHANNELS = 1  # MobileNetV2 expects 3 channels. If grayscale input, convert it.
+    INPUT_CHANNELS = 3  # MobileNetV2 expects 3 channels. If grayscale input, convert it.
     INPUT_SHAPE = (INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS)
     
     NUM_CLASSES = 2  # E.g.: "beer", "can"
