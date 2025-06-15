@@ -360,11 +360,14 @@ def main_stage2_training():
 
     # 6. Compiler le modèle combiné pour l'entraînement de la tête RNN
     # Nous ne fournissons une perte que pour la sortie 'motion_output'.
-    # Si les autres têtes ne sont pas gelées, Keras pourrait se plaindre de l'absence de perte pour elles.
+    # Pour la sortie 'fomo_output' qui est gelée, nous pouvons spécifier None comme perte.
     combined_model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE_STAGE2),
-        loss={'motion_output': 'categorical_crossentropy'}, # Perte uniquement pour la tête de mouvement
-        metrics={'motion_output': ['accuracy']}
+        loss={
+            'fomo_output': None,  # Pas de perte calculée pour la sortie FOMO gelée
+            'motion_output': 'categorical_crossentropy'
+        },
+        metrics={'motion_output': ['accuracy']} # Métriques uniquement pour la sortie de mouvement
     )
 
     # 7. Entraîner le modèle (principalement la tête RNN)
