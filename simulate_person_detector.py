@@ -3,6 +3,7 @@ import glob
 import cv2
 import numpy as np
 import tensorflow as tf
+import math # Ajouté pour sqrt
 from fomo_trainer import fomo_loss_function # Nécessaire pour charger le modèle avec une perte personnalisée
 
 # --- Configuration (doit correspondre aux paramètres d'entraînement) ---
@@ -22,6 +23,15 @@ PERSON_CLASS_ID = 0  # L'ID de classe pour 'personne' dans la sortie du modèle
 NUM_CLASSES_MODEL_OUTPUT = 1 + 1 # Nombre de classes d'objets + 1 pour l'arrière-plan
 
 DETECTION_THRESHOLD = 0.8  # Seuil de confiance pour considérer une détection
+
+# Configuration pour le suivi des centroïdes et la prédiction de panoramique
+CENTROID_MATCHING_THRESHOLD_DISTANCE = INPUT_WIDTH / 4  # Distance max pour apparier les centroïdes entre les images
+HIST_NUM_BINS = 10  # Nombre de classes pour l'histogramme de mouvement horizontal
+# Plage pour l'histogramme: de -moitié_largeur_input à +moitié_largeur_input
+HIST_RANGE = (-INPUT_WIDTH // 2, INPUT_WIDTH // 2)
+# Seuil pour la différence de mouvement dans l'histogramme pour prédire un panoramique
+PAN_PREDICTION_HIST_DIFF_THRESHOLD = HIST_NUM_BINS // 5 # Exemple: si 20% de plus de mouvement dans une direction
+MOTION_HIST_ZERO_THRESHOLD = INPUT_WIDTH / 20 # Marge pour considérer un mouvement comme non nul
 # --- Fin de la Configuration ---
 
 def preprocess_frame(frame, target_shape):
@@ -89,6 +99,9 @@ def main():
 
     model.summary()
 
+    prev_centroids_data = [] # Stocke les données des centroïdes de l'image précédente [(x,y,conf), ...]
+    camera_pan_prediction = "Initialisation..."
+
     if not os.path.exists(OUTPUT_VIDEO_DIR):
         os.makedirs(OUTPUT_VIDEO_DIR)
         print(f"Répertoire de sortie créé : {OUTPUT_VIDEO_DIR}")
@@ -144,12 +157,66 @@ def main():
 
             # Dessiner les détections sur l'image
             display_frame = frame.copy()
+            current_centroids_data = centroids # centroids est une liste de (x, y, confidence)
+
+            horizontal_displacements = []
+            if prev_centroids_data and current_centroids_data:
+                for curr_idx, (cx, cy, cconf) in enumerate(current_centroids_data):
+                    best_match_prev_c = None
+                    min_dist = float('inf')
+                    
+                    for prev_idx, (px, py, pconf) in enumerate(prev_centroids_data):
+                        dist = math.sqrt((cx - px)**2 + (cy - py)**2)
+                        if dist < min_dist and dist < CENTROID_MATCHING_THRESHOLD_DISTANCE:
+                            min_dist = dist
+                            best_match_prev_c = (px, py, pconf)
+                    
+                    if best_match_prev_c:
+                        dx = cx - best_match_prev_c[0]
+                        horizontal_displacements.append(dx)
+                        # Optionnel: dessiner une ligne pour montrer l'appariement
+                        # cv2.line(display_frame, (int(cx), int(cy)), (int(best_match_prev_c[0]), int(best_match_prev_c[1])), (0,0,255), 1)
+
+            if horizontal_displacements:
+                hist, bin_edges = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE)
+                
+                # Analyser l'histogramme pour prédire le mouvement panoramique
+                # Mouvement vers la gauche (dx < 0), Mouvement vers la droite (dx > 0)
+                # Les bacs sont définis par bin_edges. bin_edges[i] à bin_edges[i+1] pour hist[i]
+                
+                left_motion_sum = 0
+                right_motion_sum = 0
+                for i in range(len(hist)):
+                    bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+                    if bin_center < -MOTION_HIST_ZERO_THRESHOLD: # Mouvement significatif vers la gauche
+                        left_motion_sum += hist[i]
+                    elif bin_center > MOTION_HIST_ZERO_THRESHOLD: # Mouvement significatif vers la droite
+                        right_motion_sum += hist[i]
+
+                if right_motion_sum > left_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
+                    camera_pan_prediction = "Panoramique Camera: Gauche (Objets Droite)"
+                elif left_motion_sum > right_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
+                    camera_pan_prediction = "Panoramique Camera: Droite (Objets Gauche)"
+                else:
+                    camera_pan_prediction = "Panoramique Camera: Statique/Incertain"
+            else:
+                # Si pas de déplacements, garder la prédiction précédente ou réinitialiser
+                # camera_pan_prediction = "Panoramique Camera: N/A (pas de suivi)"
+                pass # Garde la prediction precedente si pas de nouvelles donnees
+
+            prev_centroids_data = list(current_centroids_data) # Copie pour la prochaine itération
+
             for (x, y, conf) in centroids:
                 cv2.circle(display_frame, (x, y), 10, (0, 255, 0), 2) # Cercle vert
                 cv2.putText(display_frame, f"{conf:.2f}", (x + 10, y - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-            # Afficher une grille de 12 x 12
+            # Afficher la prédiction du mouvement panoramique
+            cv2.putText(display_frame, camera_pan_prediction, (10, 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+
+
+            # Afficher une grille (correspondant à la sortie du modèle)
             grid_h = GRID_HEIGHT
             grid_w = GRID_WIDTH
             cell_height = original_h // grid_h
