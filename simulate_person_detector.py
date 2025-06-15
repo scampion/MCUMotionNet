@@ -80,6 +80,35 @@ def postprocess_heatmap(heatmap, original_frame_shape, grid_shape, person_class_
                 
     return detected_centroids
 
+def compute_optical_flow_and_draw_arrows(prev_centroids_data, current_centroids_data, display_frame, centroid_matching_threshold):
+    """
+    Calcule le flux optique simple basé sur l'appariement des centroïdes entre deux listes,
+    dessine des flèches pour les mouvements et retourne les déplacements horizontaux.
+    """
+    horizontal_displacements = []
+    
+    if prev_centroids_data and current_centroids_data:
+        for curr_idx, (cx, cy, cconf) in enumerate(current_centroids_data):
+            best_match_prev_c = None
+            min_dist = float('inf')
+            
+            for prev_idx, (px, py, pconf) in enumerate(prev_centroids_data):
+                dist = math.sqrt((cx - px)**2 + (cy - py)**2)
+                if dist < min_dist and dist < centroid_matching_threshold:
+                    min_dist = dist
+                    best_match_prev_c = (px, py, pconf)
+            
+            if best_match_prev_c:
+                dx = cx - best_match_prev_c[0]
+                horizontal_displacements.append(dx)
+                # Dessiner une flèche pour le flux optique de ce centroïde
+                prev_x, prev_y = int(best_match_prev_c[0]), int(best_match_prev_c[1])
+                curr_x, curr_y = int(cx), int(cy)
+                cv2.arrowedLine(display_frame, (prev_x, prev_y), (curr_x, curr_y), 
+                                (0, 0, 255), 2, tipLength=0.3)
+                                
+    return horizontal_displacements, display_frame
+
 def main():
     # Charger le modèle
     if not os.path.exists(MODEL_PATH):
@@ -159,26 +188,13 @@ def main():
             display_frame = frame.copy()
             current_centroids_data = centroids # centroids est une liste de (x, y, confidence)
 
-            horizontal_displacements = []
-            if prev_centroids_data and current_centroids_data:
-                for curr_idx, (cx, cy, cconf) in enumerate(current_centroids_data):
-                    best_match_prev_c = None
-                    min_dist = float('inf')
-                    
-                    for prev_idx, (px, py, pconf) in enumerate(prev_centroids_data):
-                        dist = math.sqrt((cx - px)**2 + (cy - py)**2)
-                        if dist < min_dist and dist < CENTROID_MATCHING_THRESHOLD_DISTANCE:
-                            min_dist = dist
-                            best_match_prev_c = (px, py, pconf)
-                    
-                    if best_match_prev_c:
-                        dx = cx - best_match_prev_c[0]
-                        horizontal_displacements.append(dx)
-                        # Dessiner une flèche pour le flux optique de ce centroïde
-                        prev_x, prev_y = int(best_match_prev_c[0]), int(best_match_prev_c[1])
-                        curr_x, curr_y = int(cx), int(cy)
-                        cv2.arrowedLine(display_frame, (prev_x, prev_y), (curr_x, curr_y), 
-                                        (0, 0, 255), 2, tipLength=0.3)
+            # Calculer le flux optique et dessiner les flèches
+            horizontal_displacements, display_frame = compute_optical_flow_and_draw_arrows(
+                prev_centroids_data,
+                current_centroids_data,
+                display_frame,
+                CENTROID_MATCHING_THRESHOLD_DISTANCE
+            )
 
             if horizontal_displacements:
                 hist, bin_edges = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE)
