@@ -310,3 +310,32 @@ if __name__ == '__main__':
     # 3. Adjust hyperparameters (learning rate, batch size, alpha, object_weight, etc.).
     # 4. Train the model on your data.
     # 5. Evaluate the model and export it for inference.
+
+
+def create_camera_motion_rnn_model(sequence_length, num_features, num_motion_classes=3, rnn_units=32, dense_units=16):
+    """
+    Crée un modèle RNN simple pour prédire le mouvement de la caméra.
+
+    Args:
+        sequence_length (int): Nombre de pas de temps dans la séquence d'entrée (par exemple, nombre d'histogrammes consécutifs).
+        num_features (int): Nombre de caractéristiques à chaque pas de temps (par exemple, HIST_NUM_BINS).
+        num_motion_classes (int): Nombre de classes de mouvement de caméra à prédire (par exemple, 3 pour gauche, droite, statique).
+        rnn_units (int): Nombre d'unités dans la couche RNN (LSTM/GRU).
+        dense_units (int): Nombre d'unités dans la couche Dense intermédiaire.
+
+    Returns:
+        tf.keras.Model: Le modèle RNN compilé.
+    """
+    model = tf.keras.Sequential([
+        layers.Input(shape=(sequence_length, num_features)),
+        # Vous pouvez choisir LSTM ou GRU. GRU est souvent un peu plus rapide et performant sur des séquences plus courtes.
+        layers.GRU(rnn_units, return_sequences=False), # return_sequences=False car on veut une sortie après toute la séquence
+        layers.Dense(dense_units, activation='relu'),
+        layers.Dropout(0.3), # Ajout d'un Dropout pour la régularisation
+        layers.Dense(num_motion_classes, activation='softmax') # Sortie de classification pour les mouvements
+    ])
+
+    # Compiler le modèle est généralement fait avant l'entraînement.
+    # Pour l'instant, nous le retournons non compilé ou avec un compilateur générique si besoin pour sauvegarde/chargement.
+    # model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    return model

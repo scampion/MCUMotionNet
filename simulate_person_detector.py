@@ -32,6 +32,12 @@ HIST_RANGE = (-INPUT_WIDTH // 2, INPUT_WIDTH // 2)
 # Seuil pour la différence de mouvement dans l'histogramme pour prédire un panoramique
 PAN_PREDICTION_HIST_DIFF_THRESHOLD = HIST_NUM_BINS // 5 # Exemple: si 20% de plus de mouvement dans une direction
 MOTION_HIST_ZERO_THRESHOLD = INPUT_WIDTH / 20 # Marge pour considérer un mouvement comme non nul
+
+# Configuration pour le modèle RNN de prédiction de mouvement de caméra
+RNN_MODEL_PATH = 'camera_motion_rnn_model.h5' # Chemin vers le modèle RNN entraîné
+RNN_SEQUENCE_LENGTH = 10  # Nombre d'histogrammes consécutifs à utiliser pour la prédiction RNN
+# Les classes de mouvement attendues par le modèle RNN (exemple)
+MOTION_CLASSES = ["Tourner Gauche", "Rester Statique", "Tourner Droite"]
 # --- Fin de la Configuration ---
 
 def preprocess_frame(frame, target_shape):
@@ -152,19 +158,32 @@ def main():
 
     # La fonction de perte est nécessaire si elle a été utilisée pendant l'entraînement et la sauvegarde
     # et n'est pas une perte Keras standard.
-    custom_objects = {'loss': fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT)}
+    fomo_custom_objects = {'loss': fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT)}
     try:
-        model = tf.keras.models.load_model(MODEL_PATH, custom_objects=custom_objects)
-        print(f"Modèle chargé depuis {MODEL_PATH}")
+        fomo_model = tf.keras.models.load_model(MODEL_PATH, custom_objects=fomo_custom_objects)
+        print(f"Modèle FOMO chargé depuis {MODEL_PATH}")
     except Exception as e:
-        print(f"Erreur lors du chargement du modèle : {e}")
-        print("Assurez-vous que la fonction de perte personnalisée est correctement définie si nécessaire.")
+        print(f"Erreur lors du chargement du modèle FOMO : {e}")
         return
+    fomo_model.summary()
 
-    model.summary()
+    # Charger le modèle RNN de prédiction de mouvement de caméra
+    camera_motion_model = None
+    if os.path.exists(RNN_MODEL_PATH):
+        try:
+            # Aucune custom_objects n'est spécifiée ici, ajustez si votre modèle RNN en a besoin.
+            camera_motion_model = tf.keras.models.load_model(RNN_MODEL_PATH)
+            print(f"Modèle RNN de mouvement de caméra chargé depuis {RNN_MODEL_PATH}")
+            camera_motion_model.summary()
+        except Exception as e:
+            print(f"Erreur lors du chargement du modèle RNN : {e}. La prédiction de mouvement se basera sur l'ancienne méthode.")
+            camera_motion_model = None # S'assurer qu'il est None en cas d'échec
+    else:
+        print(f"Modèle RNN non trouvé à {RNN_MODEL_PATH}. La prédiction de mouvement se basera sur l'ancienne méthode.")
 
-    prev_centroids_data = [] # Stocke les données des centroïdes de l'image précédente [(x,y,conf), ...]
+    prev_centroids_data = [] 
     camera_pan_prediction = "Initialisation..."
+    histogram_sequence = [] # Pour stocker la séquence d'histogrammes pour le RNN
 
     if not os.path.exists(OUTPUT_VIDEO_DIR):
         os.makedirs(OUTPUT_VIDEO_DIR)
@@ -208,7 +227,7 @@ def main():
             input_tensor = np.expand_dims(processed_frame, axis=0)
 
             # Inférence
-            heatmap_output = model.predict(input_tensor)
+            heatmap_output = fomo_model.predict(input_tensor)
             
             # Post-traitement
             centroids = postprocess_heatmap(
@@ -239,34 +258,60 @@ def main():
             # Vous pouvez commenter/décommenter cette ligne pour activer/désactiver l'affichage des flèches
             display_frame = draw_optical_flow_arrows(display_frame, matched_centroid_pairs)
 
+            current_hist = np.zeros(HIST_NUM_BINS, dtype=np.float32) # Initialiser l'histogramme du pas de temps courant
             if horizontal_displacements:
-                hist, bin_edges = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE)
+                hist_values, _ = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE)
+                current_hist = hist_values.astype(np.float32)
                 
-                # Analyser l'histogramme pour prédire le mouvement panoramique
-                # Mouvement vers la gauche (dx < 0), Mouvement vers la droite (dx > 0)
-                # Les bacs sont définis par bin_edges. bin_edges[i] à bin_edges[i+1] pour hist[i]
-                
-                left_motion_sum = 0
-                right_motion_sum = 0
-                for i in range(len(hist)):
-                    bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
-                    if bin_center < -MOTION_HIST_ZERO_THRESHOLD: # Mouvement significatif vers la gauche
-                        left_motion_sum += hist[i]
-                    elif bin_center > MOTION_HIST_ZERO_THRESHOLD: # Mouvement significatif vers la droite
-                        right_motion_sum += hist[i]
+                # Normaliser l'histogramme si nécessaire (par exemple, par le nombre total de déplacements ou max_val)
+                # Pour l'instant, utilisons les comptes bruts.
+                # if np.sum(current_hist) > 0:
+                #    current_hist = current_hist / np.sum(current_hist)
 
-                if right_motion_sum > left_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
-                    camera_pan_prediction = "Panoramique Camera: Gauche (Objets Droite)"
-                elif left_motion_sum > right_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
-                    camera_pan_prediction = "Panoramique Camera: Droite (Objets Gauche)"
+
+            if camera_motion_model:
+                histogram_sequence.append(current_hist)
+                if len(histogram_sequence) > RNN_SEQUENCE_LENGTH:
+                    histogram_sequence.pop(0) # Garder la séquence à la bonne longueur
+
+                if len(histogram_sequence) == RNN_SEQUENCE_LENGTH:
+                    # Préparer l'entrée pour le RNN
+                    rnn_input_sequence = np.expand_dims(np.array(histogram_sequence), axis=0) # (1, sequence_length, num_features)
+                    
+                    try:
+                        motion_prediction_probs = camera_motion_model.predict(rnn_input_sequence)
+                        predicted_class_idx = np.argmax(motion_prediction_probs[0])
+                        camera_pan_prediction = f"RNN: {MOTION_CLASSES[predicted_class_idx]}"
+                    except Exception as e:
+                        print(f"Erreur de prédiction RNN: {e}")
+                        camera_pan_prediction = "RNN: Erreur"
+
                 else:
-                    camera_pan_prediction = "Panoramique Camera: Statique/Incertain"
-            else:
-                # Si pas de déplacements, garder la prédiction précédente ou réinitialiser
-                # camera_pan_prediction = "Panoramique Camera: N/A (pas de suivi)"
-                pass # Garde la prediction precedente si pas de nouvelles donnees
+                    camera_pan_prediction = f"RNN: Collecte ({len(histogram_sequence)}/{RNN_SEQUENCE_LENGTH})"
 
-            prev_centroids_data = list(current_centroids_data) # Copie pour la prochaine itération, current_centroids_data contient (x,y,conf,r,c)
+            else: # Fallback sur l'ancienne méthode si le modèle RNN n'est pas chargé
+                if horizontal_displacements: # Assurez-vous que hist_values (anciennement hist) est défini
+                    left_motion_sum = 0
+                    right_motion_sum = 0
+                    # bin_edges est nécessaire si on utilise l'ancienne méthode
+                    _, bin_edges = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE) 
+                    for i in range(len(current_hist)): # current_hist a la même taille que hist_values
+                        bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
+                        if bin_center < -MOTION_HIST_ZERO_THRESHOLD:
+                            left_motion_sum += current_hist[i]
+                        elif bin_center > MOTION_HIST_ZERO_THRESHOLD:
+                            right_motion_sum += current_hist[i]
+
+                    if right_motion_sum > left_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
+                        camera_pan_prediction = "Panoramique Camera: Gauche (Objets Droite)"
+                    elif left_motion_sum > right_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
+                        camera_pan_prediction = "Panoramique Camera: Droite (Objets Gauche)"
+                    else:
+                        camera_pan_prediction = "Panoramique Camera: Statique/Incertain"
+                # else: # Si pas de déplacements, garder la prédiction précédente ou réinitialiser
+                #     pass # Garde la prediction precedente si pas de nouvelles donnees
+
+            prev_centroids_data = list(current_centroids_data) # Copie pour la prochaine itération
 
             # centroids est une liste de (x, y, conf, r, c)
             for (x, y, conf, r_grid, c_grid) in centroids: # Dépaqueter r_grid, c_grid même si non utilisés ici
@@ -279,19 +324,20 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
 
             # Préparer la zone d'affichage de l'histogramme des mouvements horizontaux
+            # current_hist contient l'histogramme du pas de temps actuel
             hist_display_height = 50
             hist_display_width = INPUT_WIDTH # ou une autre largeur appropriée
             hist_img = np.zeros((hist_display_height, hist_display_width, 3), dtype=np.uint8) # Fond noir par défaut
 
-            if horizontal_displacements:
+            if np.any(current_hist): # Si current_hist n'est pas que des zéros (signifie qu'il y a eu des déplacements)
                 # Normaliser l'histogramme pour l'affichage
-                hist_max_val = np.max(hist) # hist est défini si horizontal_displacements n'est pas vide
+                hist_max_val = np.max(current_hist) 
                 if hist_max_val == 0: hist_max_val = 1 # Éviter la division par zéro
 
                 bin_width_display = hist_display_width / HIST_NUM_BINS
                 
                 for i in range(HIST_NUM_BINS):
-                    bin_height = int((hist[i] / hist_max_val) * (hist_display_height - 5)) # -5 pour une petite marge
+                    bin_height = int((current_hist[i] / hist_max_val) * (hist_display_height - 5)) # -5 pour une petite marge
                     start_x = int(i * bin_width_display)
                     end_x = int((i + 1) * bin_width_display)
                     cv2.rectangle(hist_img, 
