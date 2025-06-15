@@ -6,6 +6,9 @@ import tensorflow as tf
 import math
 import json
 from tensorflow.keras.utils import Sequence as KerasSequence # Renommer pour éviter conflit si on importe Sequence de typing
+from joblib import Memory
+
+memory = Memory("./cachedir", verbose=0) # Pour la mise en cache des séquences extraites
 
 from fomo_trainer import (
     create_fomo_rnn_combined_model, 
@@ -164,6 +167,7 @@ class VideoSequenceDataGenerator(KerasSequence):
         if self.shuffle:
             np.random.shuffle(self.indexes)
 
+    @memory.cache()
     def _extract_sequences_from_videos(self):
         all_sequences_with_labels = []
         print("Extraction des séquences et génération des étiquettes auto-supervisées...")
