@@ -245,10 +245,10 @@ def main():
                 model_input_sequence = np.expand_dims(np.array(frame_sequence), axis=0) # (1, seq_length, H, W, C)
                 
                 try:
-                    # Le modèle combiné retourne deux sorties
+                    # Le modèle combiné retourne deux sorties sous forme de dictionnaire
                     predictions = combined_model.predict(model_input_sequence)
-                    heatmap_output_fomo = predictions[0] # Sortie FOMO
-                    motion_prediction_probs = predictions[1] # Sortie Mouvement Caméra
+                    heatmap_output_fomo = predictions['fomo_output'] # Accès par clé
+                    motion_prediction_probs = predictions['motion_output'] # Accès par clé
 
                     predicted_class_idx = np.argmax(motion_prediction_probs[0])
                     camera_pan_prediction = f"RNN: {MOTION_CLASSES[predicted_class_idx]}"

@@ -417,7 +417,10 @@ def create_fomo_rnn_combined_model(
     # 6. Créer le modèle combiné
     combined_model = tf.keras.Model(
         inputs=sequence_input,
-        outputs=[fomo_logits_output, motion_prediction_output],
+        outputs={
+            'fomo_output': fomo_logits_output, 
+            'motion_output': motion_prediction_output
+        },
         name="fomo_rnn_combined_model"
     )
 
