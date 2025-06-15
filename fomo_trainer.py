@@ -425,3 +425,105 @@ def create_fomo_rnn_combined_model(
     )
 
     return combined_model
+
+
+def create_fomo_td_with_rnn_combined_model(
+    input_sequence_shape,
+    fomo_num_classes, 
+    motion_num_classes,
+    fomo_alpha=0.35,
+    fomo_backbone_cutoff_layer_name='block_6_expand_relu',
+    fomo_head_conv_filters=32,
+    rnn_type='convlstm', # Options: 'convlstm', 'gru'
+    rnn_conv_lstm_filters=64,
+    rnn_gru_units=64,
+    rnn_dense_units=32
+    ):
+    """
+    Crée un modèle combiné où un modèle FOMO complet est appliqué en TimeDistributed,
+    et sa sortie séquentielle alimente un RNN pour la prédiction de mouvement.
+
+    Args:
+        input_sequence_shape (tuple): Shape de la séquence d'images (seq_length, height, width, channels).
+        fomo_num_classes (int): Nombre de classes d'objets pour FOMO (excluant l'arrière-plan).
+        motion_num_classes (int): Nombre de classes pour la prédiction de mouvement.
+        fomo_alpha (float): Alpha pour MobileNetV2.
+        fomo_backbone_cutoff_layer_name (str): Couche de coupure du backbone.
+        fomo_head_conv_filters (int): Filtres pour la tête de convolution FOMO.
+        rnn_type (str): Type de RNN à utiliser ('convlstm' ou 'gru').
+        rnn_conv_lstm_filters (int): Filtres pour ConvLSTM2D (si rnn_type='convlstm').
+        rnn_gru_units (int): Unités pour GRU (si rnn_type='gru').
+        rnn_dense_units (int): Unités pour la couche Dense de la tête RNN.
+
+    Returns:
+        tf.keras.Model: Le modèle combiné.
+    """
+    sequence_length, height, width, channels = input_sequence_shape
+    single_image_input_shape = (height, width, channels)
+    fomo_num_classes_with_background = fomo_num_classes + 1
+
+    # 1. Définir le modèle FOMO complet (backbone + tête) qui sera encapsulé par TimeDistributed
+    fomo_sub_input = layers.Input(shape=single_image_input_shape, name="fomo_sub_model_input")
+    
+    base_mobilenetv2_sub = tf.keras.applications.MobileNetV2(
+        input_tensor=fomo_sub_input, # Important: utiliser input_tensor pour connecter
+        alpha=fomo_alpha,
+        include_top=False,
+        weights='imagenet'
+    )
+    try:
+        fomo_backbone_output_sub = base_mobilenetv2_sub.get_layer(fomo_backbone_cutoff_layer_name).output
+    except ValueError:
+        print(f"Error: Layer '{fomo_backbone_cutoff_layer_name}' not found in sub-model. Check MobileNetV2 alpha {fomo_alpha}.")
+        raise
+    
+    # Tête FOMO pour le sous-modèle
+    fomo_head_sub = layers.Conv2D(filters=fomo_head_conv_filters, kernel_size=(1, 1), padding='same', activation='relu', name="fomo_sub_head_conv")(fomo_backbone_output_sub)
+    fomo_logits_sub_output = layers.Conv2D(filters=fomo_num_classes_with_background, kernel_size=(1, 1), padding='same', activation=None, name="fomo_sub_logits_output")(fomo_head_sub)
+    
+    fomo_processing_model = tf.keras.Model(inputs=fomo_sub_input, outputs=fomo_logits_sub_output, name="fomo_processing_sub_model")
+
+    # 2. Entrée principale pour la séquence d'images
+    main_sequence_input = layers.Input(shape=input_sequence_shape, name="main_sequence_input")
+
+    # 3. Appliquer le modèle FOMO complet à chaque image de la séquence
+    # Sortie: (batch, seq_length, grid_h, grid_w, fomo_num_classes_with_background)
+    fomo_heatmap_sequence = layers.TimeDistributed(fomo_processing_model, name="time_distributed_fomo_processing")(main_sequence_input)
+
+    # 4. Sortie FOMO du modèle combiné : la carte de chaleur de la dernière image
+    # Shape: (batch, grid_h, grid_w, fomo_num_classes_with_background)
+    last_fomo_heatmap_output = layers.Lambda(lambda x: x[:, -1, :, :, :], name="fomo_output")(fomo_heatmap_sequence)
+
+    # 5. Tête RNN pour la prédiction de mouvement, utilisant la séquence de cartes de chaleur FOMO
+    motion_rnn_input = fomo_heatmap_sequence
+    
+    if rnn_type.lower() == 'convlstm':
+        rnn_features = layers.ConvLSTM2D(filters=rnn_conv_lstm_filters, kernel_size=(3,3), padding='same', return_sequences=False, name="motion_convlstm")(motion_rnn_input)
+        # La sortie de ConvLSTM2D (avec return_sequences=False) est (batch, grid_h, grid_w, rnn_conv_lstm_filters)
+        # Elle doit être aplatie avant la couche Dense.
+        rnn_features_flattened = layers.Flatten(name="motion_rnn_features_flatten")(rnn_features)
+    elif rnn_type.lower() == 'gru':
+        # Pour GRU, nous devons aplatir les dimensions spatiales de chaque carte de chaleur dans la séquence.
+        # Shape d'entrée pour GRU: (batch, seq_length, features)
+        # features = grid_h * grid_w * fomo_num_classes_with_background
+        # La couche Reshape s'en chargera.
+        reshaped_for_gru = layers.Reshape(target_shape=(sequence_length, -1), name="reshape_heatmaps_for_gru")(motion_rnn_input)
+        rnn_features = layers.GRU(rnn_gru_units, return_sequences=False, name="motion_gru")(reshaped_for_gru)
+        # La sortie de GRU (avec return_sequences=False) est (batch, rnn_gru_units)
+        rnn_features_flattened = rnn_features # Déjà aplati pour la partie temporelle
+    else:
+        raise ValueError(f"Unsupported rnn_type: {rnn_type}. Choose 'convlstm' or 'gru'.")
+
+    rnn_dense_layer = layers.Dense(rnn_dense_units, activation='relu', name="motion_dense_layer")(rnn_features_flattened)
+    motion_prediction_output = layers.Dense(motion_num_classes, activation='softmax', name="motion_output")(rnn_dense_layer)
+
+    # 6. Créer le modèle combiné final
+    final_combined_model = tf.keras.Model(
+        inputs=main_sequence_input,
+        outputs={
+            'fomo_output': last_fomo_heatmap_output,
+            'motion_output': motion_prediction_output
+        },
+        name="fomo_td_rnn_combined_model"
+    )
+    return final_combined_model
