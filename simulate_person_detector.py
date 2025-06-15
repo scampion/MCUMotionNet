@@ -231,6 +231,9 @@ def main():
                 current_centroids_data, # Est déjà une liste de (x,y,conf,r,c)
                 (GRID_HEIGHT, GRID_WIDTH)
             )
+            # print horizontal_displacements # Pour débogage, afficher les déplacements horizontaux
+            print("Horizontal Displacements:", horizontal_displacements)
+
 
             # Dessiner les flèches de flux optique (pour le débogage)
             # Vous pouvez commenter/décommenter cette ligne pour activer/désactiver l'affichage des flèches
