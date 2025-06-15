@@ -435,9 +435,9 @@ def create_fomo_td_with_rnn_combined_model(
     fomo_backbone_cutoff_layer_name='block_6_expand_relu',
     fomo_head_conv_filters=32,
     rnn_type='convlstm', # Options: 'convlstm', 'gru'
-    rnn_conv_lstm_filters=64,
+    rnn_conv_lstm_filters=4, #64,
     rnn_gru_units=64,
-    rnn_dense_units=32
+    rnn_dense_units=8 #32
     ):
     """
     Crée un modèle combiné où un modèle FOMO complet est appliqué en TimeDistributed,
