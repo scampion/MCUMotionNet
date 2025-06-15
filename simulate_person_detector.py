@@ -14,7 +14,7 @@ INPUT_HEIGHT = 96
 INPUT_WIDTH = 96
 INPUT_SHAPE = (INPUT_HEIGHT, INPUT_WIDTH, 3) # 3 canaux pour RGB
 
-SPATIAL_REDUCTION = 8     # Doit correspondre à la réduction utilisée par le modèle FOMO
+SPATIAL_REDUCTION = 4     # Doit correspondre à la réduction utilisée par le modèle FOMO
 GRID_HEIGHT = INPUT_HEIGHT // SPATIAL_REDUCTION
 GRID_WIDTH = INPUT_WIDTH // SPATIAL_REDUCTION
 

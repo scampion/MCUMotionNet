@@ -23,7 +23,7 @@ ALPHA = 0.35  # MobileNetV2 alpha
 # Alternative 2: 'expanded_conv_project_BN' for 1/2 reduction (96x96 -> 48x48 grid)
 # Alternative 3: 'block_10_expand_relu' for 1/16 reduction (96x96 -> 6x6 grid)
 BACKBONE_CUTOFF_LAYER_NAME = 'block_6_expand_relu' # MODIFIEZ CECI pour une autre option
-BACKBONE_CUTOFF_LAYER_NAME = 'block_10_expand_relu'
+BACKBONE_CUTOFF_LAYER_NAME = 'block_3_expand_relu'
 
 _known_cutoffs = {
     'expanded_conv_project_BN': 2,   # Results in 1/2 spatial reduction (e.g., 96x96 -> 48x48)
