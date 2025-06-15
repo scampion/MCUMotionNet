@@ -174,8 +174,11 @@ def main():
                     if best_match_prev_c:
                         dx = cx - best_match_prev_c[0]
                         horizontal_displacements.append(dx)
-                        # Optionnel: dessiner une ligne pour montrer l'appariement
-                        # cv2.line(display_frame, (int(cx), int(cy)), (int(best_match_prev_c[0]), int(best_match_prev_c[1])), (0,0,255), 1)
+                        # Dessiner une flèche pour le flux optique de ce centroïde
+                        prev_x, prev_y = int(best_match_prev_c[0]), int(best_match_prev_c[1])
+                        curr_x, curr_y = int(cx), int(cy)
+                        cv2.arrowedLine(display_frame, (prev_x, prev_y), (curr_x, curr_y), 
+                                        (0, 0, 255), 2, tipLength=0.3)
 
             if horizontal_displacements:
                 hist, bin_edges = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE)
@@ -214,6 +217,40 @@ def main():
             # Afficher la prédiction du mouvement panoramique
             cv2.putText(display_frame, camera_pan_prediction, (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+
+            # Dessiner l'histogramme des mouvements horizontaux
+            if horizontal_displacements:
+                hist_display_height = 50
+                hist_display_width = INPUT_WIDTH # ou une autre largeur appropriée
+                hist_img = np.zeros((hist_display_height, hist_display_width, 3), dtype=np.uint8)
+                
+                # Normaliser l'histogramme pour l'affichage
+                hist_max_val = np.max(hist)
+                if hist_max_val == 0: hist_max_val = 1 # Éviter la division par zéro
+
+                bin_width_display = hist_display_width / HIST_NUM_BINS
+                
+                for i in range(HIST_NUM_BINS):
+                    bin_height = int((hist[i] / hist_max_val) * (hist_display_height - 5)) # -5 pour une petite marge
+                    start_x = int(i * bin_width_display)
+                    end_x = int((i + 1) * bin_width_display)
+                    cv2.rectangle(hist_img, 
+                                  (start_x, hist_display_height - bin_height), 
+                                  (end_x - 1, hist_display_height -1), # -1 pour séparer les barres
+                                  (0, 255, 0), cv2.FILLED)
+                
+                # Superposer l'histogramme sur display_frame
+                # Définir la position de l'histogramme (par exemple, en bas)
+                hist_y_offset = original_h - hist_display_height - 10 # 10px de marge du bas
+                hist_x_offset = 10 # 10px de marge de gauche
+                
+                # S'assurer que la zone de l'histogramme ne dépasse pas les dimensions de display_frame
+                if hist_y_offset + hist_display_height <= original_h and \
+                   hist_x_offset + hist_display_width <= original_w:
+                    display_frame[hist_y_offset : hist_y_offset + hist_display_height,
+                                  hist_x_offset : hist_x_offset + hist_display_width] = hist_img
+                    cv2.putText(display_frame, "Histo Mvt Horizontal", (hist_x_offset, hist_y_offset - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 
 
             # Afficher une grille (correspondant à la sortie du modèle)
