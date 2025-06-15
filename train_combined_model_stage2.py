@@ -314,7 +314,9 @@ def main_stage2_training():
         # que le sous-modèle 'fomo_backbone' dans le modèle combiné.
         # tf.keras.applications.MobileNetV2 est utilisé dans les deux cas.
         
-        fomo_backbone_combined = combined_model.get_layer('fomo_backbone')
+        # Accéder au modèle fomo_backbone encapsulé dans la couche TimeDistributed
+        time_distributed_layer = combined_model.get_layer('time_distributed_backbone')
+        fomo_backbone_combined = time_distributed_layer.layer # C'est le modèle fomo_backbone
         
         num_layers_transferred = 0
         for layer_stage1 in fomo_stage1_model.layers:
@@ -338,7 +340,8 @@ def main_stage2_training():
 
     # 5. Geler les couches du backbone et de la tête FOMO
     print("Gel des couches du backbone et de la tête FOMO...")
-    fomo_backbone_combined = combined_model.get_layer('fomo_backbone')
+    # fomo_backbone_combined est déjà défini correctement ci-dessus pour le transfert de poids
+    # et pointe vers le modèle fomo_backbone encapsulé.
     fomo_backbone_combined.trainable = False
     
     # Geler aussi les couches de la tête FOMO du modèle combiné
