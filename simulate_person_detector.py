@@ -80,34 +80,50 @@ def postprocess_heatmap(heatmap, original_frame_shape, grid_shape, person_class_
                 
     return detected_centroids
 
-def compute_optical_flow_and_draw_arrows(prev_centroids_data, current_centroids_data, display_frame, centroid_matching_threshold):
+def compute_optical_flow(prev_centroids_data, current_centroids_data, centroid_matching_threshold):
     """
-    Calcule le flux optique simple basé sur l'appariement des centroïdes entre deux listes,
-    dessine des flèches pour les mouvements et retourne les déplacements horizontaux.
+    Calcule le flux optique simple basé sur l'appariement des centroïdes.
+    Retourne les paires de centroïdes appariés et les déplacements horizontaux.
     """
     horizontal_displacements = []
+    matched_pairs = [] # Liste pour stocker les paires ((px, py), (cx, cy))
     
     if prev_centroids_data and current_centroids_data:
+        # Créer une liste de booléens pour marquer les centroïdes précédents comme utilisés
+        # pour éviter qu'un centroïde précédent soit apparié à plusieurs centroïdes courants.
+        # Optionnel, mais peut améliorer la logique d'appariement si nécessaire.
+        # Pour l'instant, on garde l'appariement simple au plus proche.
+
         for curr_idx, (cx, cy, cconf) in enumerate(current_centroids_data):
-            best_match_prev_c = None
+            best_match_prev_c_data = None
             min_dist = float('inf')
             
             for prev_idx, (px, py, pconf) in enumerate(prev_centroids_data):
                 dist = math.sqrt((cx - px)**2 + (cy - py)**2)
                 if dist < min_dist and dist < centroid_matching_threshold:
                     min_dist = dist
-                    best_match_prev_c = (px, py, pconf)
+                    best_match_prev_c_data = (px, py) # Stocker uniquement les coordonnées
             
-            if best_match_prev_c:
-                dx = cx - best_match_prev_c[0]
+            if best_match_prev_c_data:
+                prev_x, prev_y = best_match_prev_c_data
+                dx = cx - prev_x
                 horizontal_displacements.append(dx)
-                # Dessiner une flèche pour le flux optique de ce centroïde
-                prev_x, prev_y = int(best_match_prev_c[0]), int(best_match_prev_c[1])
-                curr_x, curr_y = int(cx), int(cy)
-                cv2.arrowedLine(display_frame, (prev_x, prev_y), (curr_x, curr_y), 
-                                (0, 0, 255), 2, tipLength=0.3)
+                matched_pairs.append(((prev_x, prev_y), (cx, cy)))
                                 
-    return horizontal_displacements, display_frame
+    return matched_pairs, horizontal_displacements
+
+def draw_optical_flow_arrows(display_frame, matched_pairs):
+    """
+    Dessine des flèches de flux optique sur l'image pour le débogage.
+    Prend en entrée l'image et les paires de centroïdes appariés.
+    """
+    for pair in matched_pairs:
+        (prev_x, prev_y), (curr_x, curr_y) = pair
+        cv2.arrowedLine(display_frame, 
+                        (int(prev_x), int(prev_y)), 
+                        (int(curr_x), int(curr_y)), 
+                        (0, 0, 255), 2, tipLength=0.3)
+    return display_frame
 
 def main():
     # Charger le modèle
@@ -188,13 +204,16 @@ def main():
             display_frame = frame.copy()
             current_centroids_data = centroids # centroids est une liste de (x, y, confidence)
 
-            # Calculer le flux optique et dessiner les flèches
-            horizontal_displacements, display_frame = compute_optical_flow_and_draw_arrows(
+            # Calculer le flux optique
+            matched_centroid_pairs, horizontal_displacements = compute_optical_flow(
                 prev_centroids_data,
                 current_centroids_data,
-                display_frame,
                 CENTROID_MATCHING_THRESHOLD_DISTANCE
             )
+
+            # Dessiner les flèches de flux optique (pour le débogage)
+            # Vous pouvez commenter/décommenter cette ligne pour activer/désactiver l'affichage des flèches
+            display_frame = draw_optical_flow_arrows(display_frame, matched_centroid_pairs)
 
             if horizontal_displacements:
                 hist, bin_edges = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE)
