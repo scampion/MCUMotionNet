@@ -21,6 +21,12 @@ from fomo_trainer import (
 # --- Configuration ---
 VIDEO_DATA_DIR = 'data/videos_for_rnn_training'
 ANNOTATION_DATA_DIR = 'data/videos_for_rnn_training_annotations' # Répertoire pour les fichiers CSV d'annotations
+
+VIDEO_DATA_DIR = '/Users/scampion/src/sport_video_scrapper/data/videos'
+ANNOTATION_DATA_DIR = '/Users/scampion/src/sport_video_scrapper/camera_movement_reports' # Répertoire pour les fichiers CSV d'annotations
+
+
+
 STAGE1_FOMO_MODEL_PATH = 'person_detector_fomo.h5'
 COMBINED_MODEL_SAVE_PATH = 'fomo_td_rnn_regression_stage2.h5' # Nom de modèle mis à jour
 
@@ -89,7 +95,7 @@ class VideoSequenceDataGenerator(KerasSequence):
         for video_path in self.video_files:
             video_filename = os.path.basename(video_path)
             video_name_without_ext = os.path.splitext(video_filename)[0]
-            annotation_path = os.path.join(self.annotation_dir, f"{video_name_without_ext}.csv")
+            annotation_path = os.path.join(self.annotation_dir, f"{video_name_without_ext}_movement.csv")
 
             if not os.path.exists(annotation_path):
                 print(f"Attention: Fichier d'annotation CSV non trouvé pour {video_path} à {annotation_path}. Vidéo ignorée.")
