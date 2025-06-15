@@ -5,164 +5,76 @@ import numpy as np
 import tensorflow as tf
 import math
 import json
-from tensorflow.keras.utils import Sequence as KerasSequence # Renommer pour éviter conflit si on importe Sequence de typing
+import pandas as pd # Ajout de pandas pour lire les CSV
+from tensorflow.keras.utils import Sequence as KerasSequence 
 from joblib import Memory
 
-memory = Memory("./cachedir", verbose=0) # Pour la mise en cache des séquences extraites
+memory = Memory("./cachedir", verbose=0) 
 
 from fomo_trainer import (
-    create_fomo_rnn_combined_model,
-    create_fomo_td_with_rnn_combined_model, # Ajout du nouveau modèle
-    fomo_loss_function, # Pour charger le modèle FOMO de la phase 1
-    create_fomo_model # Pour charger le modèle FOMO de la phase 1
+    create_fomo_rnn_combined_model, # Sera utilisé si vous avez plusieurs types de modèles combinés
+    create_fomo_td_with_rnn_combined_model, 
+    fomo_loss_function, 
+    create_fomo_model 
 )
 
-# --- Configuration (similaire à simulate_person_detector.py et train_person_detector.py) ---
-VIDEO_DATA_DIR = 'data/videos_for_rnn_training' # Répertoire contenant les vidéos pour la phase 2
-STAGE1_FOMO_MODEL_PATH = 'person_detector_fomo.h5' # Modèle FOMO de la phase 1
-# Mettre à jour le chemin de sauvegarde pour le nouveau type de modèle
-COMBINED_MODEL_SAVE_PATH = 'fomo_td_rnn_combined_model_stage2.h5' 
+# --- Configuration ---
+VIDEO_DATA_DIR = 'data/videos_for_rnn_training'
+ANNOTATION_DATA_DIR = 'data/videos_for_rnn_training_annotations' # Répertoire pour les fichiers CSV d'annotations
+STAGE1_FOMO_MODEL_PATH = 'person_detector_fomo.h5'
+COMBINED_MODEL_SAVE_PATH = 'fomo_td_rnn_regression_stage2.h5' # Nom de modèle mis à jour
 
 INPUT_HEIGHT = 96
 INPUT_WIDTH = 96
 INPUT_CHANNELS = 3
-INPUT_SHAPE = (INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS) # Pour une image unique
-SEQUENCE_LENGTH = 10  # Nombre d'images par séquence pour le RNN
+INPUT_SHAPE = (INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS)
+SEQUENCE_LENGTH = 10
 COMBINED_MODEL_INPUT_SHAPE = (SEQUENCE_LENGTH, INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS)
 
-# Paramètres FOMO (doivent correspondre au modèle de phase 1 et à la config du modèle combiné)
 FOMO_ALPHA = 0.35
-# Assurez-vous que ce BACKBONE_CUTOFF_LAYER_NAME correspond à celui utilisé pour STAGE1_FOMO_MODEL_PATH
-# et à celui que vous voulez dans le modèle combiné.
-# Le train_person_detector.py utilise 'block_3_expand_relu' (réduction par 4)
-# Le simulate_person_detector.py utilise SPATIAL_REDUCTION = 4
-# Le fomo_trainer.py dans create_fomo_rnn_combined_model a 'block_6_expand_relu' par défaut.
-# Il est crucial que ces éléments soient cohérents.
-# Pour cet exemple, nous allons supposer que le modèle de phase 1 et le combiné utilisent la même config.
 _known_cutoffs_local = {
     'expanded_conv_project_BN': 2,
     'block_3_expand_relu': 4,
     'block_6_expand_relu': 8,
     'block_10_expand_relu': 16
 }
-FOMO_BACKBONE_CUTOFF_LAYER_NAME = 'block_3_expand_relu' # Doit correspondre à la phase 1
+FOMO_BACKBONE_CUTOFF_LAYER_NAME = 'block_3_expand_relu'
 if FOMO_BACKBONE_CUTOFF_LAYER_NAME not in _known_cutoffs_local:
     raise ValueError(f"Cutoff layer {FOMO_BACKBONE_CUTOFF_LAYER_NAME} non supporté ici.")
 SPATIAL_REDUCTION = _known_cutoffs_local[FOMO_BACKBONE_CUTOFF_LAYER_NAME]
 
-GRID_HEIGHT = INPUT_HEIGHT // SPATIAL_REDUCTION
-GRID_WIDTH = INPUT_WIDTH // SPATIAL_REDUCTION
-PERSON_CLASS_ID = 0 
-NUM_OBJECT_CLASSES_FOMO = 1 # 'personne'
-NUM_CLASSES_MODEL_OUTPUT_FOMO = NUM_OBJECT_CLASSES_FOMO + 1
-DETECTION_THRESHOLD = 0.5 # Seuil pour considérer une détection lors de la génération d'étiquettes
+GRID_HEIGHT = INPUT_HEIGHT // SPATIAL_REDUCTION # Utilisé par l'architecture FOMO
+GRID_WIDTH = INPUT_WIDTH // SPATIAL_REDUCTION  # Utilisé par l'architecture FOMO
+# PERSON_CLASS_ID, NUM_OBJECT_CLASSES_FOMO, DETECTION_THRESHOLD ne sont plus utilisés pour la génération d'étiquettes de mouvement
+NUM_CLASSES_MODEL_OUTPUT_FOMO = 1 + 1 # Pour chargement modèle phase 1 (person + background)
 
-# Paramètres pour la génération d'étiquettes de mouvement (auto-supervision)
-HIST_NUM_BINS = 10
-HIST_RANGE = (-INPUT_WIDTH // 2, INPUT_WIDTH // 2)
-MOTION_HIST_ZERO_THRESHOLD = INPUT_WIDTH / 20
-PAN_PREDICTION_HIST_DIFF_THRESHOLD = HIST_NUM_BINS // 5
-MOTION_CLASSES = ["Tourner Gauche", "Rester Statique", "Tourner Droite"]
-NUM_MOTION_CLASSES = len(MOTION_CLASSES)
+# La sortie du RNN est maintenant une valeur de régression unique (mouvement X)
+NUM_MOTION_OUTPUTS = 1 
 
 # Hyperparamètres d'entraînement pour la phase 2
 BATCH_SIZE_STAGE2 = 8
-LEARNING_RATE_STAGE2 = 0.0005
-EPOCHS_STAGE2 = 30
-RNN_TYPE_STAGE2 = 'convlstm' # Type de RNN pour create_fomo_td_with_rnn_combined_model ('convlstm' ou 'gru')
+LEARNING_RATE_STAGE2 = 0.0005 # Peut nécessiter un ajustement pour la régression
+EPOCHS_STAGE2 = 30 # Peut nécessiter un ajustement
+RNN_TYPE_STAGE2 = 'convlstm' 
 # --- Fin de la Configuration ---
 
-# Fonctions utilitaires (adaptées de simulate_person_detector.py)
 def preprocess_single_frame(frame, target_shape):
     img_resized = cv2.resize(frame, (target_shape[1], target_shape[0]))
     img_normalized = img_resized.astype(np.float32) / 255.0
     return img_normalized
 
-def postprocess_fomo_heatmap(heatmap_output, original_frame_shape, grid_shape, person_class_id, threshold):
-    detected_centroids = []
-    grid_h, grid_w = grid_shape
-    frame_h, frame_w = original_frame_shape
-    if heatmap_output.shape[-1] > 1:
-        heatmap_probs = tf.nn.softmax(heatmap_output, axis=-1).numpy()
-    else:
-        heatmap_probs = tf.math.sigmoid(heatmap_output).numpy()
-    
-    person_heatmap = heatmap_probs[0, :, :, person_class_id]
-    for r in range(grid_h):
-        for c in range(grid_w):
-            confidence = person_heatmap[r, c]
-            if confidence > threshold:
-                center_x_norm = (c + 0.5) / grid_w
-                center_y_norm = (r + 0.5) / grid_h
-                center_x_orig = int(center_x_norm * frame_w)
-                center_y_orig = int(center_y_norm * frame_h)
-                detected_centroids.append((center_x_orig, center_y_orig, confidence, r, c))
-    return detected_centroids
-
-def compute_displacements_for_sequence(frame_sequence_centroids):
-    """ Calcule les déplacements horizontaux pour une séquence de listes de centroïdes. """
-    all_horizontal_displacements = []
-    for i in range(len(frame_sequence_centroids) - 1):
-        prev_centroids = frame_sequence_centroids[i]
-        current_centroids = frame_sequence_centroids[i+1]
-        
-        # Adapter la logique de compute_optical_flow de simulate_person_detector.py
-        # Pour simplifier ici, on va juste prendre les déplacements bruts si des objets sont présents.
-        # Une version plus robuste utiliserait l'appariement par grille.
-        
-        # Convertir en map pour la logique d'appariement par grille (si utilisée)
-        # prev_grid_map = {(r, c): (x, y, conf) for x, y, conf, r, c in prev_centroids}
-        # current_grid_map = {(r, c): (x, y, conf) for x, y, conf, r, c in current_centroids}
-        # ... (logique d'appariement de compute_optical_flow) ...
-        # Pour cet exemple, on va faire une version simplifiée :
-        # Si des centroïdes existent dans les deux, on prend la moyenne du mouvement.
-        if prev_centroids and current_centroids:
-            # Simplification: on prend la différence des moyennes des positions x
-            # Une vraie implémentation devrait apparier les objets.
-            avg_prev_x = np.mean([c[0] for c in prev_centroids])
-            avg_curr_x = np.mean([c[0] for c in current_centroids])
-            all_horizontal_displacements.append(avg_curr_x - avg_prev_x)
-
-    return all_horizontal_displacements
-
-
-def generate_motion_label(horizontal_displacements_sequence):
-    """ Génère une étiquette de mouvement basée sur une séquence de déplacements. """
-    if not horizontal_displacements_sequence:
-        return MOTION_CLASSES.index("Rester Statique") # Statique par défaut
-
-    hist_values, bin_edges = np.histogram(horizontal_displacements_sequence, bins=HIST_NUM_BINS, range=HIST_RANGE)
-    
-    left_motion_sum = 0
-    right_motion_sum = 0
-    for i in range(len(hist_values)):
-        bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
-        if bin_center < -MOTION_HIST_ZERO_THRESHOLD:
-            left_motion_sum += hist_values[i]
-        elif bin_center > MOTION_HIST_ZERO_THRESHOLD:
-            right_motion_sum += hist_values[i]
-
-    if right_motion_sum > left_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
-        return MOTION_CLASSES.index("Tourner Gauche") # Objets vont à droite -> caméra à gauche
-    elif left_motion_sum > right_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
-        return MOTION_CLASSES.index("Tourner Droite") # Objets vont à gauche -> caméra à droite
-    else:
-        return MOTION_CLASSES.index("Rester Statique")
-
+# Les fonctions postprocess_fomo_heatmap, compute_displacements_for_sequence, 
+# et generate_motion_label ne sont plus nécessaires ici car les étiquettes proviennent des CSV.
+# Elles pourraient être conservées si utilisées ailleurs ou pour débogage, mais pour la clarté de cette modif, on les enlève de la portée directe du générateur.
 
 class VideoSequenceDataGenerator(KerasSequence):
-    def __init__(self, video_files, batch_size, sequence_length, input_shape, 
-                 stage1_fomo_model, grid_shape, person_class_id, detection_threshold,
-                 motion_label_params, shuffle=True):
+    def __init__(self, video_files, annotation_dir, batch_size, sequence_length, 
+                 input_shape, shuffle=True):
         self.video_files = video_files
+        self.annotation_dir = annotation_dir
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.input_shape = input_shape # Shape d'une image unique
-        self.stage1_fomo_model = stage1_fomo_model
-        self.grid_shape = grid_shape
-        self.person_class_id = person_class_id
-        self.detection_threshold = detection_threshold
-        self.motion_label_params = motion_label_params # dict avec HIST_NUM_BINS, etc.
         self.shuffle = shuffle
 
         self.sequences_data = self._extract_sequences_from_videos()
@@ -170,48 +82,82 @@ class VideoSequenceDataGenerator(KerasSequence):
         if self.shuffle:
             np.random.shuffle(self.indexes)
 
-    
+    #@memory.cache # Décommentez si vous souhaitez mettre en cache cette extraction coûteuse
     def _extract_sequences_from_videos(self):
         all_sequences_with_labels = []
-        print("Extraction des séquences et génération des étiquettes auto-supervisées...")
+        print("Extraction des séquences et des étiquettes de mouvement à partir des CSV...")
         for video_path in self.video_files:
-            cap = cv2.VideoCapture(video_path)
-            frames_buffer = []
-            centroids_buffer = [] # Stocke les centroïdes pour chaque frame dans frames_buffer
+            video_filename = os.path.basename(video_path)
+            video_name_without_ext = os.path.splitext(video_filename)[0]
+            annotation_path = os.path.join(self.annotation_dir, f"{video_name_without_ext}.csv")
 
-            while cap.isOpened():
+            if not os.path.exists(annotation_path):
+                print(f"Attention: Fichier d'annotation CSV non trouvé pour {video_path} à {annotation_path}. Vidéo ignorée.")
+                continue
+
+            try:
+                annotations_df = pd.read_csv(annotation_path)
+                if 'Move_X' not in annotations_df.columns:
+                    print(f"Attention: Colonne 'Move_X' non trouvée dans {annotation_path}. Vidéo ignorée.")
+                    continue
+                move_x_annotations = annotations_df['Move_X'].tolist()
+            except Exception as e:
+                print(f"Erreur lors de la lecture du fichier CSV {annotation_path}: {e}. Vidéo ignorée.")
+                continue
+            
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                print(f"Erreur: Impossible d'ouvrir la vidéo {video_path}. Vidéo ignorée.")
+                continue
+
+            all_processed_frames_for_video = []
+            frame_count_video = 0
+            while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                
-                original_h, original_w = frame.shape[:2]
                 processed_frame = preprocess_single_frame(frame, self.input_shape)
-                frames_buffer.append(processed_frame)
-
-                # Obtenir les centroïdes avec le modèle FOMO de phase 1
-                input_tensor_fomo = np.expand_dims(processed_frame, axis=0)
-                heatmap_fomo = self.stage1_fomo_model.predict(input_tensor_fomo)
-                current_centroids = postprocess_fomo_heatmap(
-                    heatmap_fomo, (original_h, original_w), self.grid_shape, 
-                    self.person_class_id, self.detection_threshold
-                )
-                centroids_buffer.append(current_centroids)
-
-                if len(frames_buffer) == self.sequence_length:
-                    # Calculer les déplacements pour la séquence de centroïdes actuelle
-                    displacements = compute_displacements_for_sequence(centroids_buffer)
-                    motion_label_idx = generate_motion_label(displacements)
-                    
-                    # Convertir en one-hot pour la loss categorical_crossentropy
-                    motion_label_one_hot = tf.keras.utils.to_categorical(motion_label_idx, num_classes=len(MOTION_CLASSES))
-                    
-                    all_sequences_with_labels.append((list(frames_buffer), motion_label_one_hot))
-                    
-                    # Faire glisser la fenêtre
-                    frames_buffer.pop(0)
-                    centroids_buffer.pop(0)
+                all_processed_frames_for_video.append(processed_frame)
+                frame_count_video += 1
             cap.release()
+
+            if frame_count_video != len(move_x_annotations):
+                # Permettre une différence si le CSV a plus d'annotations que de frames (ex: annotations manuelles)
+                # mais pas si le CSV en a moins.
+                if len(move_x_annotations) < frame_count_video:
+                    print(f"Attention: Moins d'annotations ({len(move_x_annotations)}) que de frames ({frame_count_video}) pour {video_path}. Vidéo ignorée.")
+                    continue
+                # Tronquer les annotations si elles sont plus longues que les frames disponibles
+                move_x_annotations = move_x_annotations[:frame_count_video]
+
+
+            num_possible_sequences = len(all_processed_frames_for_video) - self.sequence_length + 1
+            if num_possible_sequences <= 0:
+                print(f"Attention: Pas assez de frames ({len(all_processed_frames_for_video)}) pour former une séquence de longueur {self.sequence_length} pour {video_path}. Vidéo ignorée.")
+                continue
+
+            for i in range(num_possible_sequences):
+                sequence_frames = all_processed_frames_for_video[i : i + self.sequence_length]
+                # L'étiquette est le 'Move_X' de la dernière image de la séquence
+                # S'assurer que l'index est valide pour move_x_annotations
+                label_index = i + self.sequence_length - 1
+                if label_index < len(move_x_annotations):
+                    motion_label_value = move_x_annotations[label_index]
+                    # S'assurer que la valeur est un float et non NaN avant de convertir
+                    if pd.isna(motion_label_value):
+                        print(f"Attention: Valeur NaN pour Move_X à l'index {label_index} pour la séquence commençant à {i} dans {video_path}. Séquence ignorée.")
+                        continue
+                    motion_label = np.array([float(motion_label_value)], dtype=np.float32)
+                    all_sequences_with_labels.append((np.array(sequence_frames), motion_label))
+                else:
+                    # Ce cas ne devrait pas arriver avec la logique de troncature/vérification précédente
+                    print(f"Attention: Index d'étiquette {label_index} hors limites pour les annotations de {video_path}. Séquence ignorée.")
+        
         print(f"Extraction terminée. {len(all_sequences_with_labels)} séquences générées.")
+        if not all_sequences_with_labels:
+            # Ne pas lever d'erreur ici, permettre au script de continuer s'il y a plusieurs vidéos
+            # et que certaines seulement ont des problèmes. L'erreur sera levée plus tard si aucune donnée.
+            print("AVERTISSEMENT: Aucune séquence n'a pu être générée à partir des vidéos et annotations fournies.")
         return all_sequences_with_labels
 
     def __len__(self):
@@ -225,15 +171,10 @@ class VideoSequenceDataGenerator(KerasSequence):
 
         for i in batch_indexes:
             sequence_frames, motion_label = self.sequences_data[i]
-            batch_sequences.append(np.array(sequence_frames))
-            batch_motion_labels.append(motion_label)
+            batch_sequences.append(sequence_frames) # Déjà un np.array
+            batch_motion_labels.append(motion_label) # Déjà un np.array([val])
             
-        # Pour le modèle combiné, la sortie FOMO n'est pas directement supervisée dans cette phase 2
-        # si on se concentre uniquement sur l'entraînement de la tête RNN.
-        # On pourrait fournir des "dummy" labels pour la sortie FOMO si la compilation l'exige.
-        # Ici, on suppose que la compilation du modèle combiné pour la phase 2
-        # ne spécifiera une perte que pour la sortie 'motion_output'.
-        # Retourner les étiquettes comme un dictionnaire pour correspondre aux noms des sorties du modèle.
+        # La sortie 'motion_output' attend maintenant une forme (batch_size, 1)
         return np.array(batch_sequences), {'motion_output': np.array(batch_motion_labels)}
 
     def on_epoch_end(self):
@@ -249,52 +190,74 @@ def main_stage2_training():
         print(f"Erreur: Modèle FOMO de Phase 1 non trouvé à {STAGE1_FOMO_MODEL_PATH}")
         return
     
-    # Le modèle FOMO de phase 1 a été sauvegardé après compilation avec fomo_loss_function.
-    # Il faut donc le fournir lors du chargement.
+    # Le modèle FOMO de phase 1 est chargé pour le transfert de poids.
     fomo_stage1_model = tf.keras.models.load_model(
         STAGE1_FOMO_MODEL_PATH,
         custom_objects={'loss': fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT_FOMO)}
     )
-    print("Modèle FOMO de Phase 1 chargé.")
+    print("Modèle FOMO de Phase 1 chargé (pour transfert de poids).")
 
     # 2. Préparer le générateur de données pour la phase 2
-    video_files = glob.glob(os.path.join(VIDEO_DATA_DIR, '*.mp4')) # ou autres formats
+    video_files = sorted(glob.glob(os.path.join(VIDEO_DATA_DIR, '*.mp4'))) # ou autres formats, triés pour la reproductibilité
     if not video_files:
         print(f"Aucune vidéo trouvée dans {VIDEO_DATA_DIR} pour l'entraînement de la phase 2.")
         return
+    
+    if not os.path.isdir(ANNOTATION_DATA_DIR):
+        print(f"Erreur: Répertoire d'annotations CSV non trouvé à {ANNOTATION_DATA_DIR}")
+        return
 
-    motion_label_params = {
-        'HIST_NUM_BINS': HIST_NUM_BINS,
-        'HIST_RANGE': HIST_RANGE,
-        'MOTION_HIST_ZERO_THRESHOLD': MOTION_HIST_ZERO_THRESHOLD,
-        'PAN_PREDICTION_HIST_DIFF_THRESHOLD': PAN_PREDICTION_HIST_DIFF_THRESHOLD
-    }
+    # Diviser les fichiers vidéo pour un ensemble de validation simple (ex: 80% train, 20% val)
+    # Assurez-vous d'avoir suffisamment de vidéos pour que cela ait un sens.
+    num_videos = len(video_files)
+    if num_videos < 5: # Arbitraire, mais il faut assez de données pour spliter
+        print("Attention: Très peu de vidéos. Entraînement sans ensemble de validation dédié.")
+        train_video_files = video_files
+        val_video_files = []
+    else:
+        val_split_idx = int(num_videos * 0.8)
+        train_video_files = video_files[:val_split_idx]
+        val_video_files = video_files[val_split_idx:]
+        print(f"Utilisation de {len(train_video_files)} vidéos pour l'entraînement et {len(val_video_files)} pour la validation.")
+
 
     train_seq_generator = VideoSequenceDataGenerator(
-        video_files=video_files, # Diviser en train/val si nécessaire
+        video_files=train_video_files, 
+        annotation_dir=ANNOTATION_DATA_DIR,
         batch_size=BATCH_SIZE_STAGE2,
         sequence_length=SEQUENCE_LENGTH,
         input_shape=(INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS),
-        stage1_fomo_model=fomo_stage1_model,
-        grid_shape=(GRID_HEIGHT, GRID_WIDTH),
-        person_class_id=PERSON_CLASS_ID,
-        detection_threshold=DETECTION_THRESHOLD,
-        motion_label_params=motion_label_params
+        shuffle=True
     )
     
-    # (Optionnel) Créer un validation_seq_generator si vous avez un ensemble de validation de vidéos
+    validation_seq_generator = None
+    if val_video_files:
+        validation_seq_generator = VideoSequenceDataGenerator(
+            video_files=val_video_files,
+            annotation_dir=ANNOTATION_DATA_DIR,
+            batch_size=BATCH_SIZE_STAGE2,
+            sequence_length=SEQUENCE_LENGTH,
+            input_shape=(INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS),
+            shuffle=False # Pas besoin de mélanger pour la validation
+        )
+    
+    if not train_seq_generator.sequences_data:
+         print("Erreur: Aucune donnée d'entraînement n'a pu être chargée par le générateur. Vérifiez les fichiers vidéo et CSV.")
+         return
+
 
     # 3. Créer le modèle combiné FOMO-TD-RNN
+    # IMPORTANT: Assurez-vous que create_fomo_td_with_rnn_combined_model dans fomo_trainer.py
+    # est modifié pour que la tête RNN ait NUM_MOTION_OUTPUTS (1) sortie avec activation 'tanh'.
     combined_model = create_fomo_td_with_rnn_combined_model(
         input_sequence_shape=COMBINED_MODEL_INPUT_SHAPE,
-        fomo_num_classes=NUM_OBJECT_CLASSES_FOMO,
-        motion_num_classes=NUM_MOTION_CLASSES,
+        fomo_num_classes=1, # NUM_OBJECT_CLASSES_FOMO (personne)
+        motion_num_classes=NUM_MOTION_OUTPUTS, # Doit être 1 pour la régression
         fomo_alpha=FOMO_ALPHA,
         fomo_backbone_cutoff_layer_name=FOMO_BACKBONE_CUTOFF_LAYER_NAME,
         rnn_type=RNN_TYPE_STAGE2
-        # Les autres paramètres de create_fomo_td_with_rnn_combined_model peuvent être ajustés
     )
-    print("Modèle combiné FOMO-TD-RNN créé.")
+    print("Modèle combiné FOMO-TD-RNN (pour régression) créé.")
     combined_model.summary()
 
     # 4. Transférer les poids du modèle FOMO de phase 1 vers le sous-modèle FOMO dans TimeDistributed
@@ -335,28 +298,36 @@ def main_stage2_training():
         optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE_STAGE2),
         loss={
             'fomo_output': None,  # Pas de perte calculée pour la sortie FOMO gelée
-            'motion_output': 'categorical_crossentropy'
+            'motion_output': tf.keras.losses.MeanSquaredError() # Perte pour la régression
         },
-        metrics={'motion_output': ['accuracy']} # Métriques uniquement pour la sortie de mouvement
+        # loss_weights={'fomo_output': 0.0, 'motion_output': 1.0}, # Explicitement si besoin
+        metrics={'motion_output': [tf.keras.metrics.MeanAbsoluteError()]} # Métrique pour la régression
     )
 
     # 7. Entraîner le modèle (principalement la tête RNN)
-    print("Début de l'entraînement de la phase 2 (tête RNN)...")
+    print("Début de l'entraînement de la phase 2 (tête RNN pour régression)...")
+    
+    monitor_metric = 'val_loss' if validation_seq_generator and validation_seq_generator.sequences_data else 'loss'
+    if not (validation_seq_generator and validation_seq_generator.sequences_data):
+        print("Attention: Pas de données de validation, ModelCheckpoint et EarlyStopping surveilleront 'loss'.")
+
     try:
         combined_model.fit(
             train_seq_generator,
             epochs=EPOCHS_STAGE2,
-            # validation_data=validation_seq_generator, # Si vous en avez un
+            validation_data=validation_seq_generator if validation_seq_generator and validation_seq_generator.sequences_data else None,
             callbacks=[
-                tf.keras.callbacks.ModelCheckpoint(COMBINED_MODEL_SAVE_PATH, save_best_only=True, monitor='loss'), # ou 'val_loss'
-                tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.2, patience=3, min_lr=0.00001),
-                tf.keras.callbacks.EarlyStopping(monitor='loss', patience=7, restore_best_weights=True)
+                tf.keras.callbacks.ModelCheckpoint(COMBINED_MODEL_SAVE_PATH, save_best_only=True, monitor=monitor_metric),
+                tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor_metric, factor=0.2, patience=5, min_lr=0.00001), # Augmenté patience
+                tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=10, restore_best_weights=True) # Augmenté patience
             ]
         )
         print("Entraînement de la phase 2 terminé.")
         print(f"Modèle combiné sauvegardé dans {COMBINED_MODEL_SAVE_PATH}")
     except Exception as e:
         print(f"Erreur durant l'entraînement de la phase 2: {e}")
+        # Lever l'exception pour un débogage plus facile si nécessaire
+        # raise e 
 
     # Optionnel: Phase de Fine-tuning
     # Dégelez quelques couches supérieures du backbone et ré-entraînez avec un learning rate plus faible.

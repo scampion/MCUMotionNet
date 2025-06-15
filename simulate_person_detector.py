@@ -36,8 +36,9 @@ MOTION_HIST_ZERO_THRESHOLD = INPUT_WIDTH / 20 # Marge pour considérer un mouvem
 # Configuration pour le modèle combiné FOMO-RNN
 COMBINED_MODEL_PATH = 'fomo_rnn_combined_model.h5' # Chemin vers le modèle combiné entraîné
 SEQUENCE_LENGTH = 10  # Nombre d'images consécutives pour la prédiction de mouvement
-# Les classes de mouvement attendues par la tête RNN du modèle combiné
-MOTION_CLASSES = ["Tourner Gauche", "Rester Statique", "Tourner Droite"] 
+# Les classes de mouvement ne sont plus utilisées car la sortie RNN est une valeur continue.
+# MOTION_CLASSES = ["Tourner Gauche", "Rester Statique", "Tourner Droite"] 
+COMBINED_MODEL_PATH = 'fomo_td_rnn_regression_stage2.h5' # S'assurer que cela correspond au modèle entraîné
 # Assurez-vous que NUM_CLASSES_MODEL_OUTPUT est correct pour la tête FOMO du modèle combiné
 # --- Fin de la Configuration ---
 
@@ -247,11 +248,20 @@ def main():
                 try:
                     # Le modèle combiné retourne deux sorties sous forme de dictionnaire
                     predictions = combined_model.predict(model_input_sequence)
-                    heatmap_output_fomo = predictions['fomo_output'] # Accès par clé
-                    motion_prediction_probs = predictions['motion_output'] # Accès par clé
+                    heatmap_output_fomo = predictions['fomo_output'] 
+                    motion_prediction_value = predictions['motion_output'] # Devrait être de forme (1, 1)
 
-                    predicted_class_idx = np.argmax(motion_prediction_probs[0])
-                    camera_pan_prediction = f"RNN: {MOTION_CLASSES[predicted_class_idx]}"
+                    # motion_prediction_value[0][0] contient la valeur de régression prédite
+                    predicted_move_x = motion_prediction_value[0][0] 
+                    
+                    # Interprétation qualitative optionnelle de la valeur de mouvement X
+                    pan_description = "Statique"
+                    if predicted_move_x < -0.2: # Seuil arbitraire, à ajuster
+                        pan_description = "Mvt Gauche Cam (objets vers droite)"
+                    elif predicted_move_x > 0.2: # Seuil arbitraire, à ajuster
+                        pan_description = "Mvt Droite Cam (objets vers gauche)"
+                    
+                    camera_pan_prediction = f"RNN Move X: {predicted_move_x:.3f} ({pan_description})"
 
                 except Exception as e:
                     print(f"Erreur de prédiction avec le modèle combiné: {e}")
