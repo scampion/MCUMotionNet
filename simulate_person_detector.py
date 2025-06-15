@@ -7,7 +7,7 @@ import math # Ajouté pour sqrt
 from fomo_trainer import fomo_loss_function # Nécessaire pour charger le modèle avec une perte personnalisée
 
 # --- Configuration (doit correspondre aux paramètres d'entraînement) ---
-MODEL_PATH = 'person_detector_fomo.h5'
+# MODEL_PATH = 'person_detector_fomo.h5' # Ancien chemin, maintenant remplacé par COMBINED_MODEL_PATH
 VIDEO_DIR = 'data/test'
 OUTPUT_VIDEO_DIR = 'data/test_simulated' # Répertoire pour sauvegarder les vidéos simulées
 
@@ -33,11 +33,12 @@ HIST_RANGE = (-INPUT_WIDTH // 2, INPUT_WIDTH // 2)
 PAN_PREDICTION_HIST_DIFF_THRESHOLD = HIST_NUM_BINS // 5 # Exemple: si 20% de plus de mouvement dans une direction
 MOTION_HIST_ZERO_THRESHOLD = INPUT_WIDTH / 20 # Marge pour considérer un mouvement comme non nul
 
-# Configuration pour le modèle RNN de prédiction de mouvement de caméra
-RNN_MODEL_PATH = 'camera_motion_rnn_model.h5' # Chemin vers le modèle RNN entraîné
-RNN_SEQUENCE_LENGTH = 10  # Nombre d'histogrammes consécutifs à utiliser pour la prédiction RNN
-# Les classes de mouvement attendues par le modèle RNN (exemple)
-MOTION_CLASSES = ["Tourner Gauche", "Rester Statique", "Tourner Droite"]
+# Configuration pour le modèle combiné FOMO-RNN
+COMBINED_MODEL_PATH = 'fomo_rnn_combined_model.h5' # Chemin vers le modèle combiné entraîné
+SEQUENCE_LENGTH = 10  # Nombre d'images consécutives pour la prédiction de mouvement
+# Les classes de mouvement attendues par la tête RNN du modèle combiné
+MOTION_CLASSES = ["Tourner Gauche", "Rester Statique", "Tourner Droite"] 
+# Assurez-vous que NUM_CLASSES_MODEL_OUTPUT est correct pour la tête FOMO du modèle combiné
 # --- Fin de la Configuration ---
 
 def preprocess_frame(frame, target_shape):
@@ -151,39 +152,45 @@ def draw_optical_flow_arrows(display_frame, matched_pairs):
     return display_frame
 
 def main():
-    # Charger le modèle
-    if not os.path.exists(MODEL_PATH):
-        print(f"Erreur : Fichier modèle non trouvé à {MODEL_PATH}")
+    # Charger le modèle combiné FOMO-RNN
+    if not os.path.exists(COMBINED_MODEL_PATH):
+        print(f"Erreur : Fichier modèle combiné non trouvé à {COMBINED_MODEL_PATH}")
         return
 
-    # La fonction de perte est nécessaire si elle a été utilisée pendant l'entraînement et la sauvegarde
-    # et n'est pas une perte Keras standard.
-    fomo_custom_objects = {'loss': fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT)}
+    # Pour charger le modèle combiné, vous pourriez avoir besoin de spécifier des custom_objects
+    # si des fonctions de perte personnalisées ont été utilisées pour chaque sortie pendant l'entraînement.
+    # Pour l'instant, supposons que la fonction de perte FOMO est la seule pertinente pour le chargement
+    # si le modèle a été sauvegardé après compilation avec des noms de pertes standards pour la partie mouvement.
+    # Si le modèle a été sauvegardé avec des noms pour ses sorties, la perte fomo_loss_function
+    # doit être associée à la sortie fomo lors de la compilation du modèle combiné.
+    # Exemple: losses = {'fomo_output': fomo_loss_function(...), 'motion_output': 'categorical_crossentropy'}
+    # Pour le chargement, Keras essaie de reconstruire les pertes si elles ne sont pas standard.
+    # Il est plus sûr de fournir les objets personnalisés si nécessaire.
+    custom_objects_combined = {}
+    # Si la sortie FOMO du modèle combiné s'appelle 'fomo_output' et utilise fomo_loss_function:
+    # custom_objects_combined['fomo_output_loss'] = fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT) 
+    # Ou simplement la fonction de perte si elle est référencée par son nom dans le modèle sauvegardé.
+    custom_objects_combined['loss'] = fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT)
+
+
+    combined_model = None
     try:
-        fomo_model = tf.keras.models.load_model(MODEL_PATH, custom_objects=fomo_custom_objects)
-        print(f"Modèle FOMO chargé depuis {MODEL_PATH}")
+        # Si le modèle combiné a été sauvegardé sans sa compilation (juste les poids),
+        # vous devriez recréer l'architecture ici en appelant create_fomo_rnn_combined_model
+        # puis charger les poids avec combined_model.load_weights(COMBINED_MODEL_PATH).
+        # Si sauvegardé comme un modèle complet (model.save()), load_model devrait fonctionner.
+        combined_model = tf.keras.models.load_model(COMBINED_MODEL_PATH, custom_objects=custom_objects_combined, compile=False)
+        # compile=False est souvent plus sûr si vous n'allez pas entraîner davantage ici.
+        print(f"Modèle combiné FOMO-RNN chargé depuis {COMBINED_MODEL_PATH}")
+        combined_model.summary()
     except Exception as e:
-        print(f"Erreur lors du chargement du modèle FOMO : {e}")
+        print(f"Erreur lors du chargement du modèle combiné FOMO-RNN : {e}")
+        print("Assurez-vous que le chemin est correct et que les custom_objects nécessaires sont fournis.")
         return
-    fomo_model.summary()
-
-    # Charger le modèle RNN de prédiction de mouvement de caméra
-    camera_motion_model = None
-    if os.path.exists(RNN_MODEL_PATH):
-        try:
-            # Aucune custom_objects n'est spécifiée ici, ajustez si votre modèle RNN en a besoin.
-            camera_motion_model = tf.keras.models.load_model(RNN_MODEL_PATH)
-            print(f"Modèle RNN de mouvement de caméra chargé depuis {RNN_MODEL_PATH}")
-            camera_motion_model.summary()
-        except Exception as e:
-            print(f"Erreur lors du chargement du modèle RNN : {e}. La prédiction de mouvement se basera sur l'ancienne méthode.")
-            camera_motion_model = None # S'assurer qu'il est None en cas d'échec
-    else:
-        print(f"Modèle RNN non trouvé à {RNN_MODEL_PATH}. La prédiction de mouvement se basera sur l'ancienne méthode.")
 
     prev_centroids_data = [] 
     camera_pan_prediction = "Initialisation..."
-    histogram_sequence = [] # Pour stocker la séquence d'histogrammes pour le RNN
+    frame_sequence = [] # Pour stocker la séquence d'images pour le modèle combiné
 
     if not os.path.exists(OUTPUT_VIDEO_DIR):
         os.makedirs(OUTPUT_VIDEO_DIR)
@@ -223,26 +230,56 @@ def main():
             original_h, original_w = frame.shape[:2]
             
             # Prétraitement de l'image
-            processed_frame = preprocess_frame(frame.copy(), INPUT_SHAPE)
-            input_tensor = np.expand_dims(processed_frame, axis=0)
+            processed_frame = preprocess_frame(frame.copy(), (INPUT_HEIGHT, INPUT_WIDTH, INPUT_SHAPE[2])) # Utiliser INPUT_SHAPE pour les dimensions
 
-            # Inférence
-            heatmap_output = fomo_model.predict(input_tensor)
-            
-            # Post-traitement
-            centroids = postprocess_heatmap(
-                heatmap_output,
-                (original_h, original_w),
-                (GRID_HEIGHT, GRID_WIDTH),
-                PERSON_CLASS_ID,
-                DETECTION_THRESHOLD
-            )
+            # Gérer la séquence d'images pour le modèle combiné
+            frame_sequence.append(processed_frame)
+            if len(frame_sequence) > SEQUENCE_LENGTH:
+                frame_sequence.pop(0) # Garder la séquence à la bonne longueur
 
-            # Dessiner les détections sur l'image
+            heatmap_output_fomo = None
+            motion_prediction_probs = None
+
+            if len(frame_sequence) == SEQUENCE_LENGTH and combined_model:
+                # Préparer l'entrée pour le modèle combiné
+                model_input_sequence = np.expand_dims(np.array(frame_sequence), axis=0) # (1, seq_length, H, W, C)
+                
+                try:
+                    # Le modèle combiné retourne deux sorties
+                    predictions = combined_model.predict(model_input_sequence)
+                    heatmap_output_fomo = predictions[0] # Sortie FOMO
+                    motion_prediction_probs = predictions[1] # Sortie Mouvement Caméra
+
+                    predicted_class_idx = np.argmax(motion_prediction_probs[0])
+                    camera_pan_prediction = f"RNN: {MOTION_CLASSES[predicted_class_idx]}"
+
+                except Exception as e:
+                    print(f"Erreur de prédiction avec le modèle combiné: {e}")
+                    camera_pan_prediction = "Combiné: Erreur"
+                    # heatmap_output_fomo restera None, donc pas de détections FOMO affichées
+            else:
+                camera_pan_prediction = f"Combiné: Collecte ({len(frame_sequence)}/{SEQUENCE_LENGTH})"
+                # Pas assez d'images dans la séquence pour prédire, ou modèle non chargé
+                # heatmap_output_fomo restera None, donc pas de détections FOMO affichées dans ce cas.
+                # Si vous voulez quand même une sortie FOMO pour chaque image même pendant la collecte :
+                # vous auriez besoin d'un modèle FOMO séparé ou d'une logique pour passer une seule image.
+                # Pour l'instant, la détection FOMO n'est active que lorsque la séquence est pleine.
+
+
+            centroids = []
+            if heatmap_output_fomo is not None:
+                centroids = postprocess_heatmap(
+                    heatmap_output_fomo, # Utiliser la sortie FOMO du modèle combiné
+                    (original_h, original_w),
+                    (GRID_HEIGHT, GRID_WIDTH),
+                    PERSON_CLASS_ID,
+                    DETECTION_THRESHOLD
+                )
+
             display_frame = frame.copy()
-            current_centroids_data = centroids # centroids est une liste de (x, y, confidence)
+            current_centroids_data = centroids 
 
-            # Calculer le flux optique
+            # Calculer le flux optique (pour affichage des flèches, si souhaité)
             # current_centroids_data contient maintenant (x, y, conf, r_grid, c_grid)
             # prev_centroids_data doit aussi suivre ce format
             matched_centroid_pairs, horizontal_displacements = compute_optical_flow(
@@ -258,60 +295,21 @@ def main():
             # Vous pouvez commenter/décommenter cette ligne pour activer/désactiver l'affichage des flèches
             display_frame = draw_optical_flow_arrows(display_frame, matched_centroid_pairs)
 
-            current_hist = np.zeros(HIST_NUM_BINS, dtype=np.float32) # Initialiser l'histogramme du pas de temps courant
+            # La prédiction du mouvement de la caméra est maintenant gérée par le modèle combiné ci-dessus.
+            # La logique de l'histogramme pour la prédiction n'est plus la source principale si combined_model est utilisé.
+            # Nous calculons current_hist uniquement pour l'affichage.
+            current_hist = np.zeros(HIST_NUM_BINS, dtype=np.float32) 
             if horizontal_displacements:
                 hist_values, _ = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE)
                 current_hist = hist_values.astype(np.float32)
-                
-                # Normaliser l'histogramme si nécessaire (par exemple, par le nombre total de déplacements ou max_val)
-                # Pour l'instant, utilisons les comptes bruts.
-                # if np.sum(current_hist) > 0:
-                #    current_hist = current_hist / np.sum(current_hist)
 
+            # Si combined_model n'est pas chargé ou si la séquence n'est pas pleine, 
+            # camera_pan_prediction aura une valeur comme "Collecte..." ou "Initialisation...".
+            # Si vous souhaitez un fallback à l'ancienne méthode ici, il faudrait ajouter une condition
+            # explicite (par exemple, if not combined_model or len(frame_sequence) < SEQUENCE_LENGTH: ...)
+            # Pour l'instant, la prédiction est soit "RNN: <mouvement>", "RNN: Collecte", "RNN: Erreur", ou "Initialisation...".
 
-            if camera_motion_model:
-                histogram_sequence.append(current_hist)
-                if len(histogram_sequence) > RNN_SEQUENCE_LENGTH:
-                    histogram_sequence.pop(0) # Garder la séquence à la bonne longueur
-
-                if len(histogram_sequence) == RNN_SEQUENCE_LENGTH:
-                    # Préparer l'entrée pour le RNN
-                    rnn_input_sequence = np.expand_dims(np.array(histogram_sequence), axis=0) # (1, sequence_length, num_features)
-                    
-                    try:
-                        motion_prediction_probs = camera_motion_model.predict(rnn_input_sequence)
-                        predicted_class_idx = np.argmax(motion_prediction_probs[0])
-                        camera_pan_prediction = f"RNN: {MOTION_CLASSES[predicted_class_idx]}"
-                    except Exception as e:
-                        print(f"Erreur de prédiction RNN: {e}")
-                        camera_pan_prediction = "RNN: Erreur"
-
-                else:
-                    camera_pan_prediction = f"RNN: Collecte ({len(histogram_sequence)}/{RNN_SEQUENCE_LENGTH})"
-
-            else: # Fallback sur l'ancienne méthode si le modèle RNN n'est pas chargé
-                if horizontal_displacements: # Assurez-vous que hist_values (anciennement hist) est défini
-                    left_motion_sum = 0
-                    right_motion_sum = 0
-                    # bin_edges est nécessaire si on utilise l'ancienne méthode
-                    _, bin_edges = np.histogram(horizontal_displacements, bins=HIST_NUM_BINS, range=HIST_RANGE) 
-                    for i in range(len(current_hist)): # current_hist a la même taille que hist_values
-                        bin_center = (bin_edges[i] + bin_edges[i+1]) / 2
-                        if bin_center < -MOTION_HIST_ZERO_THRESHOLD:
-                            left_motion_sum += current_hist[i]
-                        elif bin_center > MOTION_HIST_ZERO_THRESHOLD:
-                            right_motion_sum += current_hist[i]
-
-                    if right_motion_sum > left_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
-                        camera_pan_prediction = "Panoramique Camera: Gauche (Objets Droite)"
-                    elif left_motion_sum > right_motion_sum + PAN_PREDICTION_HIST_DIFF_THRESHOLD:
-                        camera_pan_prediction = "Panoramique Camera: Droite (Objets Gauche)"
-                    else:
-                        camera_pan_prediction = "Panoramique Camera: Statique/Incertain"
-                # else: # Si pas de déplacements, garder la prédiction précédente ou réinitialiser
-                #     pass # Garde la prediction precedente si pas de nouvelles donnees
-
-            prev_centroids_data = list(current_centroids_data) # Copie pour la prochaine itération
+            prev_centroids_data = list(current_centroids_data) 
 
             # centroids est une liste de (x, y, conf, r, c)
             for (x, y, conf, r_grid, c_grid) in centroids: # Dépaqueter r_grid, c_grid même si non utilisés ici

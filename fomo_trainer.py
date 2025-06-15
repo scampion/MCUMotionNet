@@ -339,3 +339,86 @@ def create_camera_motion_rnn_model(sequence_length, num_features, num_motion_cla
     # Pour l'instant, nous le retournons non compilé ou avec un compilateur générique si besoin pour sauvegarde/chargement.
     # model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
     return model
+
+
+def create_fomo_rnn_combined_model(
+    input_sequence_shape, 
+    fomo_num_classes, 
+    motion_num_classes,
+    fomo_alpha=0.35, 
+    fomo_backbone_cutoff_layer_name='block_6_expand_relu', 
+    fomo_head_conv_filters=32,
+    rnn_conv_lstm_filters=64,
+    rnn_dense_units=32
+    ):
+    """
+    Crée un modèle combiné FOMO + RNN pour la détection d'objets et la prédiction de mouvement de caméra.
+
+    Args:
+        input_sequence_shape (tuple): Shape de la séquence d'images d'entrée (seq_length, height, width, channels).
+        fomo_num_classes (int): Nombre de classes d'objets pour FOMO (excluant l'arrière-plan).
+        motion_num_classes (int): Nombre de classes pour la prédiction de mouvement de caméra.
+        fomo_alpha (float): Alpha pour le backbone MobileNetV2 de FOMO.
+        fomo_backbone_cutoff_layer_name (str): Nom de la couche de coupure du backbone FOMO.
+        fomo_head_conv_filters (int): Filtres pour la tête de convolution FOMO.
+        rnn_conv_lstm_filters (int): Filtres pour la couche ConvLSTM2D.
+        rnn_dense_units (int): Unités pour la couche Dense de la tête RNN.
+
+    Returns:
+        tf.keras.Model: Le modèle combiné.
+    """
+    sequence_length, height, width, channels = input_sequence_shape
+    single_image_input_shape = (height, width, channels)
+    fomo_num_classes_with_background = fomo_num_classes + 1
+
+    # 1. Définir le Backbone FOMO (MobileNetV2)
+    base_mobilenetv2 = tf.keras.applications.MobileNetV2(
+        input_shape=single_image_input_shape,
+        alpha=fomo_alpha,
+        include_top=False,
+        weights='imagenet'
+    )
+    try:
+        backbone_output_tensor = base_mobilenetv2.get_layer(fomo_backbone_cutoff_layer_name).output
+    except ValueError:
+        print(f"Error: Layer '{fomo_backbone_cutoff_layer_name}' not found. Check MobileNetV2 alpha {fomo_alpha}.")
+        raise
+    
+    fomo_backbone = tf.keras.Model(inputs=base_mobilenetv2.input, outputs=backbone_output_tensor, name="fomo_backbone")
+
+    # 2. Entrée pour la séquence d'images
+    sequence_input = layers.Input(shape=input_sequence_shape, name="sequence_input")
+
+    # 3. Appliquer le backbone FOMO à chaque image de la séquence
+    # Sortie: (batch, seq_length, grid_h, grid_w, backbone_channels)
+    backbone_sequence_output = layers.TimeDistributed(fomo_backbone, name="time_distributed_backbone")(sequence_input)
+
+    # 4. Tête FOMO (appliquée à la sortie du backbone de la dernière image de la séquence)
+    # Extraire la sortie du backbone pour le dernier pas de temps
+    # Shape: (batch, grid_h, grid_w, backbone_channels)
+    last_step_backbone_output = backbone_sequence_output[:, -1, :, :, :] 
+    # Alternativement, utiliser une couche Lambda si le slicing n'est pas supporté directement dans un contexte séquentiel complexe
+    # last_step_backbone_output = layers.Lambda(lambda x: x[:, -1, :, :, :], name="extract_last_step")(backbone_sequence_output)
+
+
+    fomo_head = layers.Conv2D(filters=fomo_head_conv_filters, kernel_size=(1, 1), padding='same', activation='relu', name="fomo_head_conv")(last_step_backbone_output)
+    fomo_logits_output = layers.Conv2D(filters=fomo_num_classes_with_background, kernel_size=(1, 1), padding='same', activation=None, name="fomo_output")(fomo_head)
+
+    # 5. Tête RNN pour la prédiction de mouvement de caméra
+    # ConvLSTM2D attend une entrée de type (batch, time, rows, cols, channels)
+    # C'est déjà le format de backbone_sequence_output
+    rnn_output = layers.ConvLSTM2D(filters=rnn_conv_lstm_filters, kernel_size=(3, 3), padding='same', return_sequences=False, name="conv_lstm_motion")(backbone_sequence_output)
+    # return_sequences=False car on veut une sortie unique après avoir traité toute la séquence.
+    
+    rnn_flattened = layers.Flatten(name="rnn_flatten")(rnn_output)
+    rnn_dense = layers.Dense(rnn_dense_units, activation='relu', name="rnn_dense_motion")(rnn_flattened)
+    motion_prediction_output = layers.Dense(motion_num_classes, activation='softmax', name="motion_output")(rnn_dense)
+
+    # 6. Créer le modèle combiné
+    combined_model = tf.keras.Model(
+        inputs=sequence_input,
+        outputs=[fomo_logits_output, motion_prediction_output],
+        name="fomo_rnn_combined_model"
+    )
+
+    return combined_model
