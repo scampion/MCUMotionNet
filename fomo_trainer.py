@@ -515,7 +515,7 @@ def create_fomo_td_with_rnn_combined_model(
         raise ValueError(f"Unsupported rnn_type: {rnn_type}. Choose 'convlstm' or 'gru'.")
 
     rnn_dense_layer = layers.Dense(rnn_dense_units, activation='relu', name="motion_dense_layer")(rnn_features_flattened)
-    motion_prediction_output = layers.Dense(motion_num_classes, activation='softmax', name="motion_output")(rnn_dense_layer)
+    motion_prediction_output = layers.Dense(motion_num_classes, activation='tanh', name="motion_output")(rnn_dense_layer) # motion_num_classes sera 1
 
     # 6. Créer le modèle combiné final
     final_combined_model = tf.keras.Model(
