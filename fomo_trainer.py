@@ -4,6 +4,14 @@ from tensorflow.keras import layers
 import numpy as np
 import math
 
+# Dictionary of known MobileNetV2 layer names for backbone cutoff and their corresponding spatial reduction factors
+_known_cutoffs = {
+    'expanded_conv_project_BN': 2,   # Results in 1/2 spatial reduction (e.g., 96x96 -> 48x48)
+    'block_3_expand_relu': 4,       # Results in 1/4 spatial reduction (e.g., 96x96 -> 24x24)
+    'block_6_expand_relu': 8,       # Results in 1/8 spatial reduction (e.g., 96x96 -> 12x12)
+    'block_10_expand_relu': 16      # Results in 1/16 spatial reduction (e.g., 96x96 -> 6x6)
+}
+
 def create_fomo_model(input_shape, num_classes, alpha=0.35, backbone_cutoff_layer_name='block_6_expand_relu', head_conv_filters=32):
     """
     Creates a FOMO model based on MobileNetV2.
@@ -216,7 +224,16 @@ if __name__ == '__main__':
     ALPHA = 0.35 
 
     # The backbone output is 8x smaller than the input with 'block_6_expand_relu'
-    SPATIAL_REDUCTION = 8
+    # Example: Choose a cutoff layer. This can be changed to test different configurations.
+    BACKBONE_CUTOFF_LAYER_NAME = 'block_6_expand_relu' 
+
+    if BACKBONE_CUTOFF_LAYER_NAME not in _known_cutoffs:
+        raise ValueError(
+            f"Unsupported BACKBONE_CUTOFF_LAYER_NAME in fomo_trainer example: {BACKBONE_CUTOFF_LAYER_NAME}. "
+            f"Supported are: {list(_known_cutoffs.keys())}"
+        )
+    SPATIAL_REDUCTION = _known_cutoffs[BACKBONE_CUTOFF_LAYER_NAME]
+    
     GRID_HEIGHT = INPUT_HEIGHT // SPATIAL_REDUCTION
     GRID_WIDTH = INPUT_WIDTH // SPATIAL_REDUCTION
     GRID_SHAPE = (GRID_HEIGHT, GRID_WIDTH)
@@ -253,8 +270,12 @@ if __name__ == '__main__':
 
     # Create the FOMO model
     # Note: num_classes is the number of object classes. The background class is handled internally.
-    # The 'backbone_cutoff_layer_name' argument can be changed here if testing different cut points.
-    model = create_fomo_model(INPUT_SHAPE, NUM_CLASSES, alpha=ALPHA)
+    model = create_fomo_model(
+        INPUT_SHAPE, 
+        NUM_CLASSES, 
+        alpha=ALPHA,
+        backbone_cutoff_layer_name=BACKBONE_CUTOFF_LAYER_NAME
+    )
     model.summary()
 
     # Compile the model
