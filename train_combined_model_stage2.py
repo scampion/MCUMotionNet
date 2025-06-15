@@ -11,7 +11,8 @@ from joblib import Memory
 memory = Memory("./cachedir", verbose=0) # Pour la mise en cache des séquences extraites
 
 from fomo_trainer import (
-    create_fomo_rnn_combined_model, 
+    create_fomo_rnn_combined_model,
+    create_fomo_td_with_rnn_combined_model, # Ajout du nouveau modèle
     fomo_loss_function, # Pour charger le modèle FOMO de la phase 1
     create_fomo_model # Pour charger le modèle FOMO de la phase 1
 )
@@ -19,7 +20,8 @@ from fomo_trainer import (
 # --- Configuration (similaire à simulate_person_detector.py et train_person_detector.py) ---
 VIDEO_DATA_DIR = 'data/videos_for_rnn_training' # Répertoire contenant les vidéos pour la phase 2
 STAGE1_FOMO_MODEL_PATH = 'person_detector_fomo.h5' # Modèle FOMO de la phase 1
-COMBINED_MODEL_SAVE_PATH = 'fomo_rnn_combined_model_stage2.h5' # Modèle combiné final
+# Mettre à jour le chemin de sauvegarde pour le nouveau type de modèle
+COMBINED_MODEL_SAVE_PATH = 'fomo_td_rnn_combined_model_stage2.h5' 
 
 INPUT_HEIGHT = 96
 INPUT_WIDTH = 96
@@ -67,6 +69,7 @@ NUM_MOTION_CLASSES = len(MOTION_CLASSES)
 BATCH_SIZE_STAGE2 = 8
 LEARNING_RATE_STAGE2 = 0.0005
 EPOCHS_STAGE2 = 30
+RNN_TYPE_STAGE2 = 'convlstm' # Type de RNN pour create_fomo_td_with_rnn_combined_model ('convlstm' ou 'gru')
 # --- Fin de la Configuration ---
 
 # Fonctions utilitaires (adaptées de simulate_person_detector.py)
@@ -281,79 +284,45 @@ def main_stage2_training():
     
     # (Optionnel) Créer un validation_seq_generator si vous avez un ensemble de validation de vidéos
 
-    # 3. Créer le modèle combiné FOMO-RNN
-    combined_model = create_fomo_rnn_combined_model(
+    # 3. Créer le modèle combiné FOMO-TD-RNN
+    combined_model = create_fomo_td_with_rnn_combined_model(
         input_sequence_shape=COMBINED_MODEL_INPUT_SHAPE,
         fomo_num_classes=NUM_OBJECT_CLASSES_FOMO,
         motion_num_classes=NUM_MOTION_CLASSES,
         fomo_alpha=FOMO_ALPHA,
         fomo_backbone_cutoff_layer_name=FOMO_BACKBONE_CUTOFF_LAYER_NAME,
-        # Les autres paramètres de create_fomo_rnn_combined_model peuvent être ajustés
+        rnn_type=RNN_TYPE_STAGE2
+        # Les autres paramètres de create_fomo_td_with_rnn_combined_model peuvent être ajustés
     )
-    print("Modèle combiné FOMO-RNN créé.")
+    print("Modèle combiné FOMO-TD-RNN créé.")
     combined_model.summary()
 
-    # 4. Transférer les poids du backbone FOMO
-    # Le modèle FOMO de phase 1 est 'fomo_stage1_model'
-    # Le backbone dans 'combined_model' est nommé 'fomo_backbone' (c'est un sous-modèle)
-    
-    # Option A: Si fomo_stage1_model est juste le backbone + tête FOMO simple
-    # et que fomo_backbone dans combined_model est architecturalement identique au backbone de fomo_stage1_model
-    print("Tentative de transfert des poids du backbone...")
+    # 4. Transférer les poids du modèle FOMO de phase 1 vers le sous-modèle FOMO dans TimeDistributed
+    print("Tentative de transfert des poids du modèle FOMO de phase 1...")
     try:
-        # Le modèle FOMO de phase 1 (créé par create_fomo_model) a son backbone directement.
-        # Le modèle combiné a un sous-modèle nommé 'fomo_backbone'.
-        # Nous devons extraire les poids du backbone du modèle de phase 1.
-        
-        # Créons une instance du backbone seul à partir de create_fomo_model pour obtenir ses noms de couches
-        # ou chargeons les poids couche par couche par nom.
-        # Plus simple: si fomo_stage1_model est le modèle complet de la phase 1,
-        # et que son backbone est compatible avec le sous-modèle 'fomo_backbone' du modèle combiné.
-        
-        # Le modèle fomo_stage1_model est le modèle complet (backbone + tête fomo).
-        # Le modèle combiné a un sous-modèle 'fomo_backbone'.
-        # On peut copier les poids des couches correspondantes par nom.
-        
-        # Le plus simple est de s'assurer que le backbone du modèle de phase 1
-        # (jusqu'à FOMO_BACKBONE_CUTOFF_LAYER_NAME) a les mêmes noms de couches
-        # que le sous-modèle 'fomo_backbone' dans le modèle combiné.
-        # tf.keras.applications.MobileNetV2 est utilisé dans les deux cas.
-        
-        # Accéder au modèle fomo_backbone encapsulé dans la couche TimeDistributed
-        time_distributed_layer = combined_model.get_layer('time_distributed_backbone')
-        fomo_backbone_combined = time_distributed_layer.layer # C'est le modèle fomo_backbone
-        
-        num_layers_transferred = 0
-        for layer_stage1 in fomo_stage1_model.layers:
-            if layer_stage1.name in [l.name for l in fomo_backbone_combined.layers]:
-                target_layer_combined = fomo_backbone_combined.get_layer(layer_stage1.name)
-                if target_layer_combined.get_weights(): # S'assurer que la couche a des poids
-                    target_layer_combined.set_weights(layer_stage1.get_weights())
-                    num_layers_transferred +=1
-        print(f"{num_layers_transferred} couches de poids transférées au backbone du modèle combiné.")
+        # Le sous-modèle FOMO (backbone + tête) est encapsulé dans la couche TimeDistributed
+        time_distributed_fomo_layer = combined_model.get_layer('time_distributed_fomo_processing')
+        fomo_processing_sub_model = time_distributed_fomo_layer.layer # C'est le fomo_processing_model
 
-        # Transférer aussi les poids de la tête FOMO si elle est identique
-        # La tête FOMO du modèle combiné a les couches 'fomo_head_conv' et 'fomo_output'
-        # Celles du modèle de phase 1 sont les dernières couches après le backbone_cutoff.
-        # Supposons que les noms correspondent ou que la structure est la même.
-        # Pour l'instant, concentrons-nous sur le backbone.
+        # Assigner les poids du modèle FOMO de phase 1 directement au sous-modèle
+        # Cela suppose que fomo_stage1_model et fomo_processing_sub_model sont architecturalement identiques.
+        fomo_processing_sub_model.set_weights(fomo_stage1_model.get_weights())
+        print("Poids du modèle FOMO de phase 1 transférés au sous-modèle FOMO du modèle combiné.")
 
     except Exception as e:
-        print(f"Avertissement: Erreur lors du transfert des poids du backbone: {e}")
-        print("L'entraînement de la phase 2 commencera avec un backbone initialisé aléatoirement (ou pré-entraîné ImageNet).")
+        print(f"Avertissement: Erreur lors du transfert des poids du modèle FOMO de phase 1: {e}")
+        print("L'entraînement de la phase 2 commencera avec un sous-modèle FOMO initialisé aléatoirement (ou pré-entraîné ImageNet).")
 
 
-    # 5. Geler les couches du backbone et de la tête FOMO
-    print("Gel des couches du backbone et de la tête FOMO...")
-    # fomo_backbone_combined est déjà défini correctement ci-dessus pour le transfert de poids
-    # et pointe vers le modèle fomo_backbone encapsulé.
-    fomo_backbone_combined.trainable = False
+    # 5. Geler les couches du sous-modèle FOMO (qui est dans TimeDistributed)
+    print("Gel du sous-modèle FOMO (partie TimeDistributed)...")
+    fomo_processing_sub_model_to_freeze = combined_model.get_layer('time_distributed_fomo_processing').layer
+    fomo_processing_sub_model_to_freeze.trainable = False
     
-    # Geler aussi les couches de la tête FOMO du modèle combiné
-    combined_model.get_layer('fomo_head_conv').trainable = False
-    combined_model.get_layer('fomo_output').trainable = False # La sortie FOMO
+    # La sortie 'fomo_output' du modèle combiné est une couche Lambda et n'a pas de poids à geler.
+    # Les couches produisant les données pour cette sortie sont dans fomo_processing_sub_model_to_freeze.
     
-    print("Couches gelées. Seule la tête RNN sera entraînée initialement.")
+    print("Sous-modèle FOMO gelé. Seule la tête RNN sera entraînée initialement.")
     # Vérifier le statut des couches entraînables
     # for layer in combined_model.layers:
     #     print(f"Layer: {layer.name}, Trainable: {layer.trainable}")
