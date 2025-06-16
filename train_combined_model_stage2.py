@@ -115,49 +115,38 @@ class VideoSequenceDataGenerator(KerasSequence):
             if not cap.isOpened():
                 print(f"Erreur: Impossible d'ouvrir la vidéo {video_path}. Vidéo ignorée.")
                 continue
+            
+            frame_count_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release() # Fermer immédiatement après avoir obtenu le nombre d'images
 
-            all_processed_frames_for_video = []
-            frame_count_video = 0
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                processed_frame = preprocess_single_frame(frame, self.input_shape)
-                all_processed_frames_for_video.append(processed_frame)
-                frame_count_video += 1
-            cap.release()
+            if frame_count_video == 0:
+                print(f"Attention: La vidéo {video_path} semble vide ou corrompue (0 frame). Vidéo ignorée.")
+                continue
 
             if frame_count_video != len(move_x_annotations):
-                # Permettre une différence si le CSV a plus d'annotations que de frames (ex: annotations manuelles)
-                # mais pas si le CSV en a moins.
                 if len(move_x_annotations) + 1 < frame_count_video:
                     print(f"Attention: Moins d'annotations ({len(move_x_annotations)}) que de frames ({frame_count_video}) pour {video_path}. Vidéo ignorée.")
                     continue
-                # Tronquer les annotations si elles sont plus longues que les frames disponibles
                 move_x_annotations = move_x_annotations[:frame_count_video]
 
-
-            num_possible_sequences = len(all_processed_frames_for_video) - self.sequence_length + 1
+            num_possible_sequences = frame_count_video - self.sequence_length + 1
             if num_possible_sequences <= 0:
-                print(f"Attention: Pas assez de frames ({len(all_processed_frames_for_video)}) pour former une séquence de longueur {self.sequence_length} pour {video_path}. Vidéo ignorée.")
+                print(f"Attention: Pas assez de frames ({frame_count_video}) pour former une séquence de longueur {self.sequence_length} pour {video_path}. Vidéo ignorée.")
                 continue
 
             for i in range(num_possible_sequences):
-                sequence_frames = all_processed_frames_for_video[i : i + self.sequence_length]
-                # L'étiquette est le 'Move_X' de la dernière image de la séquence
-                # S'assurer que l'index est valide pour move_x_annotations
+                # i est l'index de début de la séquence dans la vidéo
                 label_index = i + self.sequence_length - 1
                 if label_index < len(move_x_annotations):
                     motion_label_value = move_x_annotations[label_index]
-                    # S'assurer que la valeur est un float et non NaN avant de convertir
                     if pd.isna(motion_label_value):
                         print(f"Attention: Valeur NaN pour Move_X à l'index {label_index} pour la séquence commençant à {i} dans {video_path}. Séquence ignorée.")
                         continue
                     motion_label = np.array([float(motion_label_value)], dtype=np.float32)
-                    all_sequences_with_labels.append((np.array(sequence_frames), motion_label))
+                    # Stocker le chemin, l'index de début et l'étiquette
+                    all_sequences_with_labels.append((video_path, i, motion_label))
                 else:
-                    # Ce cas ne devrait pas arriver avec la logique de troncature/vérification précédente
-                    print(f"Attention: Index d'étiquette {label_index} hors limites pour les annotations de {video_path}. Séquence ignorée.")
+                    print(f"Attention: Index d'étiquette {label_index} hors limites pour les annotations de {video_path} (longueur {len(move_x_annotations)}). Séquence ignorée.")
         
         print(f"Extraction terminée. {len(all_sequences_with_labels)} séquences générées.")
         if not all_sequences_with_labels:
@@ -176,11 +165,66 @@ class VideoSequenceDataGenerator(KerasSequence):
         batch_motion_labels = []
 
         for i in batch_indexes:
-            sequence_frames, motion_label = self.sequences_data[i]
-            batch_sequences.append(sequence_frames) # Déjà un np.array
-            batch_motion_labels.append(motion_label) # Déjà un np.array([val])
+            video_path, start_frame_idx, motion_label = self.sequences_data[i]
             
-        # La sortie 'motion_output' attend maintenant une forme (batch_size, 1)
+            current_sequence_frames = []
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                print(f"Erreur __getitem__: Impossible d'ouvrir {video_path}")
+                # Gérer l'erreur, par exemple en sautant cette séquence ou en retournant un batch plus petit
+                # Pour l'instant, on va remplir avec des zéros pour maintenir la taille du batch si possible
+                # ou lever une exception plus critique.
+                # Dans un cas réel, il faudrait une stratégie plus robuste.
+                # Ici, on va simplement sauter cette séquence pour éviter un crash.
+                continue 
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_idx)
+            
+            frames_read_count = 0
+            for _ in range(self.sequence_length):
+                ret, frame = cap.read()
+                if not ret:
+                    print(f"Erreur __getitem__: Impossible de lire la frame attendue de {video_path} à l'index {start_frame_idx + frames_read_count}")
+                    # Gérer cette situation, par exemple en ne complétant pas cette séquence.
+                    break 
+                processed_frame = preprocess_single_frame(frame, self.input_shape)
+                current_sequence_frames.append(processed_frame)
+                frames_read_count += 1
+            cap.release()
+
+            if frames_read_count == self.sequence_length:
+                batch_sequences.append(np.array(current_sequence_frames))
+                batch_motion_labels.append(motion_label)
+            else:
+                # Si la séquence n'a pas pu être entièrement lue, on l'ignore pour ce batch.
+                # Cela peut arriver si la vidéo est corrompue ou plus courte qu'annoncé.
+                print(f"Avertissement __getitem__: Séquence incomplète pour {video_path} (début {start_frame_idx}), seulement {frames_read_count}/{self.sequence_length} frames lues. Séquence ignorée.")
+
+
+        if not batch_sequences: # Si aucune séquence n'a pu être chargée
+            # Retourner des tableaux vides avec les bonnes dimensions si possible, ou gérer l'erreur.
+            # Cela dépend de la robustesse souhaitée. Pour l'instant, on peut lever une erreur
+            # si le batch est vide, car cela indique un problème plus profond.
+            # Ou, si c'est en fin d'époque et que le dernier batch est plus petit, c'est normal.
+            # Cependant, si batch_indexes n'était pas vide et que batch_sequences l'est, c'est un problème.
+            if len(batch_indexes) > 0:
+                 print("Avertissement: Aucune séquence valide n'a pu être chargée pour ce batch.")
+                 # Pour éviter un crash, on pourrait retourner None ou des données vides,
+                 # mais cela pourrait masquer des problèmes.
+                 # Pour l'instant, on laisse Keras gérer un batch potentiellement vide si cela arrive,
+                 # bien que la logique actuelle tente d'éviter cela en ignorant les séquences problématiques.
+                 # Si toutes les séquences d'un batch sont problématiques, batch_sequences sera vide.
+                 # Keras pourrait ne pas aimer un batch vide.
+                 # Une solution plus sûre serait de s'assurer que __len__ reflète uniquement les batches valides
+                 # ou de filtrer les données problématiques en amont.
+
+            # Si batch_sequences est vide, retourner des tableaux vides structurés correctement.
+            # La forme de X est (batch_size, sequence_length, H, W, C)
+            # La forme de Y est (batch_size, 1) pour la régression
+            empty_batch_x_shape = (0, self.sequence_length, self.input_shape[0], self.input_shape[1], self.input_shape[2])
+            empty_batch_y_shape = (0, 1) # Pour NUM_MOTION_OUTPUTS = 1
+            return np.empty(empty_batch_x_shape), {'motion_output': np.empty(empty_batch_y_shape)}
+
         return np.array(batch_sequences), {'motion_output': np.array(batch_motion_labels)}
 
     def on_epoch_end(self):
