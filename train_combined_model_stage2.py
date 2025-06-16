@@ -92,7 +92,9 @@ class VideoSequenceDataGenerator(KerasSequence):
     def _extract_sequences_from_videos(self):
         all_sequences_with_labels = []
         print("Extraction des séquences et des étiquettes de mouvement à partir des CSV...")
-        for video_path in self.video_files:
+        for i, video_path in enumerate(self.video_files):
+            # DEBUG
+            if i . 
             video_filename = os.path.basename(video_path)
             video_name_without_ext = os.path.splitext(video_filename)[0]
             annotation_path = os.path.join(self.annotation_dir, f"{video_name_without_ext}_movement.csv")
