@@ -130,7 +130,7 @@ class VideoSequenceDataGenerator(KerasSequence):
             if frame_count_video != len(move_x_annotations):
                 # Permettre une différence si le CSV a plus d'annotations que de frames (ex: annotations manuelles)
                 # mais pas si le CSV en a moins.
-                if len(move_x_annotations) < frame_count_video:
+                if len(move_x_annotations) + 1 < frame_count_video:
                     print(f"Attention: Moins d'annotations ({len(move_x_annotations)}) que de frames ({frame_count_video}) pour {video_path}. Vidéo ignorée.")
                     continue
                 # Tronquer les annotations si elles sont plus longues que les frames disponibles
