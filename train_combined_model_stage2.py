@@ -67,6 +67,7 @@ NUM_CLASSES_MODEL_OUTPUT_FOMO = 1 + 1 # Pour chargement modèle phase 1 (person 
 
 # La sortie du RNN est maintenant une valeur de régression unique (mouvement X)
 NUM_MOTION_OUTPUTS = 1 
+ANNOTATION_MOVE_X_NORMALIZATION_FACTOR = 3.0 # Les annotations Move_X sont attendues dans [-3, 3] et normalisées à [-1, 1]
 
 # Hyperparamètres d'entraînement pour la phase 2
 BATCH_SIZE_STAGE2 = 8
@@ -158,13 +159,15 @@ class VideoSequenceDataGenerator(KerasSequence):
                     # S'assurer que la valeur est un float.
                     original_value_float = float(motion_label_value)
                     
-                    # Borner la valeur originale à [-3, 3] pour traiter les valeurs extrêmes.
-                    # Si une valeur est, par exemple, 4.0, elle devient 3.0. Si -5.0, elle devient -3.0.
-                    clipped_original_value = np.clip(original_value_float, -3.0, 3.0)
+                    # Borner la valeur originale à [-ANNOTATION_MOVE_X_NORMALIZATION_FACTOR, ANNOTATION_MOVE_X_NORMALIZATION_FACTOR] 
+                    # pour traiter les valeurs extrêmes.
+                    clipped_original_value = np.clip(original_value_float, 
+                                                     -ANNOTATION_MOVE_X_NORMALIZATION_FACTOR, 
+                                                     ANNOTATION_MOVE_X_NORMALIZATION_FACTOR)
                     
                     # Normaliser la valeur de l'étiquette de mouvement pour qu'elle corresponde à la sortie tanh [-1, 1] du modèle.
-                    # En divisant la valeur (maintenant garantie d'être dans [-3, 3]) par 3.0.
-                    normalized_motion_value = clipped_original_value / 3.0
+                    # En divisant la valeur (maintenant garantie d'être dans les bornes) par ANNOTATION_MOVE_X_NORMALIZATION_FACTOR.
+                    normalized_motion_value = clipped_original_value / ANNOTATION_MOVE_X_NORMALIZATION_FACTOR
                     
                     # La valeur est maintenant garantie d'être dans [-1, 1].
                     motion_label = np.array([normalized_motion_value], dtype=np.float32)
