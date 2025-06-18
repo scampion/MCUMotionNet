@@ -71,7 +71,7 @@ def display_movement_info(frame, predicted_movement_x, annotated_movement_x):
     return frame
 
 # --- Logique Principale de Simulation ---
-def main(video_path, model_path, annotation_dir_override):
+def main(video_path, model_path, annotation_dir_override, output_video_path=None):
     global ANNOTATION_DATA_DIR
     if annotation_dir_override:
         ANNOTATION_DATA_DIR = annotation_dir_override
@@ -99,6 +99,19 @@ def main(video_path, model_path, annotation_dir_override):
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     print(f"Vidéo ouverte : {frame_width}x{frame_height} @ {fps:.2f} FPS, Total Frames: {total_frames_video}")
+
+    # Initialiser VideoWriter si un chemin de sortie est fourni
+    video_writer = None
+    if output_video_path:
+        # Utiliser un codec commun comme MP4V pour .mp4 ou XVID pour .avi
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v') # ou 'XVID'
+        video_writer = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
+        if not video_writer.isOpened():
+            print(f"Erreur: Impossible d'ouvrir VideoWriter pour le chemin: {output_video_path}")
+            # Optionnel: décider si l'on doit quitter ou juste continuer sans sauvegarder
+            video_writer = None # S'assurer qu'il est None pour ne pas tenter d'écrire
+        else:
+            print(f"Sauvegarde de la vidéo visualisée dans : {output_video_path}")
 
     # 3. Charger les Annotations
     video_filename = os.path.basename(video_path)
@@ -161,6 +174,10 @@ def main(video_path, model_path, annotation_dir_override):
         # Afficher l'image avec la prédiction et l'annotation
         display_frame = display_movement_info(original_frame_for_display, predicted_movement_x, current_annotated_movement_x)
         cv2.imshow('Camera Movement Simulation & Annotation', display_frame)
+
+        # Sauvegarder l'image si VideoWriter est initialisé
+        if video_writer:
+            video_writer.write(display_frame)
         
         current_frame_idx += 1
         # Quitter avec la touche 'q'
@@ -169,6 +186,9 @@ def main(video_path, model_path, annotation_dir_override):
 
     # 4. Nettoyage
     cap.release()
+    if video_writer:
+        video_writer.release()
+        print(f"Vidéo de sortie sauvegardée dans {output_video_path}")
     cv2.destroyAllWindows()
     print("Simulation terminée.")
 
@@ -180,6 +200,8 @@ if __name__ == '__main__':
                         help=f"Chemin vers le fichier de modèle .h5 entraîné (défaut: {DEFAULT_MODEL_PATH}).")
     parser.add_argument("--annotation_dir", default=None,
                         help=f"Surcharger le répertoire des annotations CSV (défaut: {DEFAULT_ANNOTATION_DATA_DIR}).")
+    parser.add_argument("--output_video", default=None,
+                        help="Chemin optionnel pour sauvegarder la vidéo visualisée (ex: output.mp4).")
     
     args = parser.parse_args()
 
@@ -200,4 +222,4 @@ if __name__ == '__main__':
         print(f"Erreur: Répertoire d'annotations spécifié non trouvé à {args.annotation_dir}")
         exit(1)
 
-    main(args.video_path, args.model_path, args.annotation_dir)
+    main(args.video_path, args.model_path, args.annotation_dir, args.output_video)
