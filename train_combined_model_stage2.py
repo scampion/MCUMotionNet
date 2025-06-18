@@ -154,8 +154,17 @@ class VideoSequenceDataGenerator(KerasSequence):
                     if pd.isna(motion_label_value):
                         print(f"Attention: Valeur NaN pour Move_X à l'index {label_index} pour la séquence commençant à {i} dans {video_path}. Séquence ignorée.")
                         continue
-                    motion_label = np.array([float(motion_label_value)], dtype=np.float32)
-                    # Stocker le chemin, l'index de début et l'étiquette
+                    
+                    # Normaliser la valeur de l'étiquette de mouvement
+                    # L'activation tanh du modèle produit une sortie dans [-1, 1].
+                    # Nous supposons que les annotations originales Move_X sont dans [-3, 3].
+                    # Donc, nous divisons par 3 pour les ramener à [-1, 1].
+                    normalized_motion_value = float(motion_label_value) / 3.0
+                    # Borner la valeur à [-1, 1] par sécurité
+                    clipped_motion_value = np.clip(normalized_motion_value, -1.0, 1.0)
+                    
+                    motion_label = np.array([clipped_motion_value], dtype=np.float32)
+                    # Stocker le chemin, l'index de début et l'étiquette normalisée
                     all_sequences_with_labels.append((video_path, i, motion_label))
                 else:
                     print(f"Attention: Index d'étiquette {label_index} hors limites pour les annotations de {video_path} (longueur {len(move_x_annotations)}). Séquence ignorée.")
