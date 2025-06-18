@@ -155,16 +155,20 @@ class VideoSequenceDataGenerator(KerasSequence):
                         print(f"Attention: Valeur NaN pour Move_X à l'index {label_index} pour la séquence commençant à {i} dans {video_path}. Séquence ignorée.")
                         continue
                     
-                    # Normaliser la valeur de l'étiquette de mouvement
-                    # L'activation tanh du modèle produit une sortie dans [-1, 1].
-                    # Nous supposons que les annotations originales Move_X sont dans [-3, 3].
-                    # Donc, nous divisons par 3 pour les ramener à [-1, 1].
-                    normalized_motion_value = float(motion_label_value) / 3.0
-                    # Borner la valeur à [-1, 1] par sécurité
-                    clipped_motion_value = np.clip(normalized_motion_value, -1.0, 1.0)
+                    # S'assurer que la valeur est un float.
+                    original_value_float = float(motion_label_value)
                     
-                    motion_label = np.array([clipped_motion_value], dtype=np.float32)
-                    # Stocker le chemin, l'index de début et l'étiquette normalisée
+                    # Borner la valeur originale à [-3, 3] pour traiter les valeurs extrêmes.
+                    # Si une valeur est, par exemple, 4.0, elle devient 3.0. Si -5.0, elle devient -3.0.
+                    clipped_original_value = np.clip(original_value_float, -3.0, 3.0)
+                    
+                    # Normaliser la valeur de l'étiquette de mouvement pour qu'elle corresponde à la sortie tanh [-1, 1] du modèle.
+                    # En divisant la valeur (maintenant garantie d'être dans [-3, 3]) par 3.0.
+                    normalized_motion_value = clipped_original_value / 3.0
+                    
+                    # La valeur est maintenant garantie d'être dans [-1, 1].
+                    motion_label = np.array([normalized_motion_value], dtype=np.float32)
+                    # Stocker le chemin, l'index de début et l'étiquette normalisée et bornée.
                     all_sequences_with_labels.append((video_path, i, motion_label))
                 else:
                     print(f"Attention: Index d'étiquette {label_index} hors limites pour les annotations de {video_path} (longueur {len(move_x_annotations)}). Séquence ignorée.")
