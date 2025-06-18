@@ -25,10 +25,21 @@ ANNOTATION_DATA_DIR = 'data/videos_for_rnn_training_annotations' # Répertoire p
 VIDEO_DATA_DIR = '/Users/scampion/src/sport_video_scrapper/data/videos'
 ANNOTATION_DATA_DIR = '/Users/scampion/src/sport_video_scrapper/camera_movement_reports' # Répertoire pour les fichiers CSV d'annotations
 
+VIDEO_DATA_DIR = os.environ.get("VIDEO_DATA_DIR", VIDEO_DATA_DIR)
+ANNOTATION_DATA_DIR = os.environ.get("ANNOTATION_DATA_DIR", ANNOTATION_DATA_DIR)
+
 
 
 STAGE1_FOMO_MODEL_PATH = 'person_detector_fomo.h5'
 COMBINED_MODEL_SAVE_PATH = 'fomo_td_rnn_regression_stage2.h5' # Nom de modèle mis à jour
+
+if 'COMBINED_MODEL_SAVE_DIR' in os.environ:
+    COMBINED_MODEL_SAVE_DIR = os.environ['COMBINED_MODEL_SAVE_DIR']
+    if not os.path.exists(COMBINED_MODEL_SAVE_DIR):
+        os.makedirs(COMBINED_MODEL_SAVE_DIR)
+    COMBINED_MODEL_SAVE_PATH = os.path.join(COMBINED_MODEL_SAVE_DIR, COMBINED_MODEL_SAVE_PATH)
+
+
 
 INPUT_HEIGHT = 96
 INPUT_WIDTH = 96
@@ -94,7 +105,6 @@ class VideoSequenceDataGenerator(KerasSequence):
         print("Extraction des séquences et des étiquettes de mouvement à partir des CSV...")
         for i, video_path in enumerate(self.video_files):
             # DEBUG
-            if i . 
             video_filename = os.path.basename(video_path)
             video_name_without_ext = os.path.splitext(video_filename)[0]
             annotation_path = os.path.join(self.annotation_dir, f"{video_name_without_ext}_movement.csv")
@@ -251,6 +261,9 @@ def main_stage2_training():
 
     # 2. Préparer le générateur de données pour la phase 2
     video_files = sorted(glob.glob(os.path.join(VIDEO_DATA_DIR, '*.mp4'))) # ou autres formats, triés pour la reproductibilité
+    # DEBUG
+    video_files = video_files[:50]
+
     if not video_files:
         print(f"Aucune vidéo trouvée dans {VIDEO_DATA_DIR} pour l'entraînement de la phase 2.")
         return
