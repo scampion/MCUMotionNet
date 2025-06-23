@@ -3,6 +3,7 @@ import glob
 import numpy as np
 import tensorflow as tf
 import json # Importer le module json
+import datetime # Import datetime for timestamped logs
 from fomo_trainer import create_fomo_model, fomo_loss_function, FomoDataGenerator
 
 # --- Configuration ---
@@ -48,6 +49,7 @@ LEARNING_RATE = 0.001
 EPOCHS = 50  # Start with a smaller number for testing, e.g., 10-50
 OBJECT_WEIGHT = 100.0
 MODEL_SAVE_PATH = 'person_detector_fomo.h5' # Keras H5 format
+TENSORBOARD_LOG_DIR = 'logs/fit' # Base directory for TensorBoard logs
 # --- End Configuration ---
 
 def load_annotations(ann_file_path):
@@ -192,6 +194,11 @@ if __name__ == '__main__':
     print(f"Number of object classes (excluding background): {NUM_OBJECT_CLASSES}")
     print(f"Training on {len(train_image_files)} images, validating on {len(val_image_files) if val_image_files else 0} images.")
 
+    # Setup TensorBoard
+    log_dir = os.path.join(TENSORBOARD_LOG_DIR, datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
+    print(f"TensorBoard logs will be saved to: {log_dir}")
+
     try:
         history = model.fit(
             train_generator,
@@ -200,7 +207,8 @@ if __name__ == '__main__':
             callbacks=[
                 tf.keras.callbacks.ModelCheckpoint(MODEL_SAVE_PATH, save_best_only=True, monitor='val_loss' if validation_generator else 'loss'),
                 tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss' if validation_generator else 'loss', factor=0.2, patience=5, min_lr=0.00001),
-                tf.keras.callbacks.EarlyStopping(monitor='val_loss' if validation_generator else 'loss', patience=10, restore_best_weights=True)
+                tf.keras.callbacks.EarlyStopping(monitor='val_loss' if validation_generator else 'loss', patience=10, restore_best_weights=True),
+                tensorboard_callback
             ]
         )
         print("\nTraining completed.")
