@@ -74,6 +74,12 @@ BATCH_SIZE_STAGE2 = 8
 LEARNING_RATE_STAGE2 = 0.0005 # Peut nécessiter un ajustement pour la régression
 EPOCHS_STAGE2 = 30 # Peut nécessiter un ajustement
 RNN_TYPE_STAGE2 = 'convlstm' 
+
+# Configuration pour TensorBoard
+LOG_DIR = "logs/fit/" 
+if 'TENSORBOARD_LOG_DIR' in os.environ:
+    LOG_DIR = os.environ['TENSORBOARD_LOG_DIR']
+
 # --- Fin de la Configuration ---
 
 def preprocess_single_frame(frame, target_shape):
@@ -392,6 +398,13 @@ def main_stage2_training():
     if not (validation_seq_generator and validation_seq_generator.sequences_data):
         print("Attention: Pas de données de validation, ModelCheckpoint et EarlyStopping surveilleront 'loss'.")
 
+    # Créer le callback TensorBoard
+    import datetime
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(
+        log_dir=os.path.join(LOG_DIR, datetime.datetime.now().strftime("%Y%m%d-%H%M%S")), 
+        histogram_freq=1
+    )
+
     try:
         combined_model.fit(
             train_seq_generator,
@@ -400,7 +413,8 @@ def main_stage2_training():
             callbacks=[
                 tf.keras.callbacks.ModelCheckpoint(COMBINED_MODEL_SAVE_PATH, save_best_only=True, monitor=monitor_metric),
                 tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor_metric, factor=0.2, patience=5, min_lr=0.00001), # Augmenté patience
-                tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=10, restore_best_weights=True) # Augmenté patience
+                tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=10, restore_best_weights=True), # Augmenté patience
+                tensorboard_callback # Ajout du callback TensorBoard
             ]
         )
         print("Entraînement de la phase 2 terminé.")
