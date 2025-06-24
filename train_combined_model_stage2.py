@@ -67,7 +67,7 @@ NUM_CLASSES_MODEL_OUTPUT_FOMO = 1 + 1 # Pour chargement modèle phase 1 (person 
 
 # La sortie du RNN est maintenant une valeur de régression unique (mouvement X)
 NUM_MOTION_OUTPUTS = 1 
-ANNOTATION_MOVE_X_NORMALIZATION_FACTOR = 3.0 # Les annotations Move_X sont attendues dans [-3, 3] et normalisées à [-1, 1]
+ANNOTATION_MOVE_X_NORMALIZATION_FACTOR = 3.0 # Les annotations Move_X sont attendues dans [-3, 3] et normalisées à [-1, 1] elles sont calculées comme le 95 centiles des valeurs annotées
 
 # Hyperparamètres d'entraînement pour la phase 2
 BATCH_SIZE_STAGE2 = 8
