@@ -34,8 +34,10 @@ def create_fomo_model(input_shape, num_classes, alpha=0.35, backbone_cutoff_laye
         input_shape=input_shape,
         alpha=alpha,
         include_top=False,
-        weights='imagenet'
+        weights = None
     )
+
+    backbone.load_weights('mobilenet_v2.weights.h5')
 
     # Extract the output at the specified cutoff layer
     try:
