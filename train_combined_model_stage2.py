@@ -6,40 +6,68 @@ import tensorflow as tf
 import math
 import json
 import pandas as pd # Ajout de pandas pour lire les CSV
-from tensorflow.keras.utils import Sequence as KerasSequence 
+from tensorflow.keras.utils import Sequence as KerasSequence
 from joblib import Memory
+import datetime
 
-memory = Memory("./cachedir", verbose=0) 
+memory = Memory("./cachedir", verbose=0)
 
 from fomo_trainer import (
-    create_fomo_rnn_combined_model, # Sera utilisé si vous avez plusieurs types de modèles combinés
-    create_fomo_td_with_rnn_combined_model, 
-    fomo_loss_function, 
-    create_fomo_model 
+    create_fomo_td_with_rnn_combined_model,
+    fomo_loss_function
 )
 
-# --- Configuration ---
-VIDEO_DATA_DIR = 'data/videos_for_rnn_training'
-ANNOTATION_DATA_DIR = 'data/videos_for_rnn_training_annotations' # Répertoire pour les fichiers CSV d'annotations
+# --- Experiment Configurations ---
+EXPERIMENTS = [
+    {
+        "name": "extra_small_rnn_lstm_filters_2_dense_4",
+        "rnn_type": "convlstm",
+        "rnn_conv_lstm_filters": 2,
+        "rnn_dense_units": 4,
+        "rnn_gru_units": 16,  # Not used for convlstm
+    },
+    {
+        "name": "small_rnn_lstm_filters_4_dense_8",
+        "rnn_type": "convlstm",
+        "rnn_conv_lstm_filters": 4,
+        "rnn_dense_units": 8,
+        "rnn_gru_units": 32,  # Not used for convlstm
+    },
+    {
+        "name": "medium_rnn_lstm_filters_8_dense_16",
+        "rnn_type": "convlstm",
+        "rnn_conv_lstm_filters": 8,
+        "rnn_dense_units": 16,
+        "rnn_gru_units": 64,  # Not used for convlstm
+    },
+    {
+        "name": "large_rnn_lstm_filters_16_dense_16",
+        "rnn_type": "convlstm",
+        "rnn_conv_lstm_filters": 16,
+        "rnn_dense_units": 16,
+        "rnn_gru_units": 64,  # Not used for convlstm
+    },
+    {
+        "name": "extra_large_rnn_lstm_filters_32_dense_32",
+        "rnn_type": "convlstm",
+        "rnn_conv_lstm_filters": 32,
+        "rnn_dense_units": 32,
+        "rnn_gru_units": 128,  # Not used for convlstm
+    }
+]
 
+
+# --- General Configuration ---
 VIDEO_DATA_DIR = '/Users/scampion/src/sport_video_scrapper/data/videos'
-ANNOTATION_DATA_DIR = '/Users/scampion/src/sport_video_scrapper/camera_movement_reports' # Répertoire pour les fichiers CSV d'annotations
+ANNOTATION_DATA_DIR = '/Users/scampion/src/sport_video_scrapper/camera_movement_reports'
 
 VIDEO_DATA_DIR = os.environ.get("VIDEO_DATA_DIR", VIDEO_DATA_DIR)
 ANNOTATION_DATA_DIR = os.environ.get("ANNOTATION_DATA_DIR", ANNOTATION_DATA_DIR)
 
-
-
 STAGE1_FOMO_MODEL_PATH = 'person_detector_fomo.h5'
-COMBINED_MODEL_SAVE_PATH = 'fomo_td_rnn_regression_stage2.h5' # Nom de modèle mis à jour
+BASE_MODEL_SAVE_NAME = 'fomo_td_rnn_regression_stage2'
 
-if 'COMBINED_MODEL_SAVE_DIR' in os.environ:
-    COMBINED_MODEL_SAVE_DIR = os.environ['COMBINED_MODEL_SAVE_DIR']
-    if not os.path.exists(COMBINED_MODEL_SAVE_DIR):
-        os.makedirs(COMBINED_MODEL_SAVE_DIR)
-    COMBINED_MODEL_SAVE_PATH = os.path.join(COMBINED_MODEL_SAVE_DIR, COMBINED_MODEL_SAVE_PATH)
-
-
+COMBINED_MODEL_SAVE_DIR = os.environ.get('COMBINED_MODEL_SAVE_DIR', '.')
 
 INPUT_HEIGHT = 96
 INPUT_WIDTH = 96
@@ -60,133 +88,94 @@ if FOMO_BACKBONE_CUTOFF_LAYER_NAME not in _known_cutoffs_local:
     raise ValueError(f"Cutoff layer {FOMO_BACKBONE_CUTOFF_LAYER_NAME} non supporté ici.")
 SPATIAL_REDUCTION = _known_cutoffs_local[FOMO_BACKBONE_CUTOFF_LAYER_NAME]
 
-GRID_HEIGHT = INPUT_HEIGHT // SPATIAL_REDUCTION # Utilisé par l'architecture FOMO
-GRID_WIDTH = INPUT_WIDTH // SPATIAL_REDUCTION  # Utilisé par l'architecture FOMO
-# PERSON_CLASS_ID, NUM_OBJECT_CLASSES_FOMO, DETECTION_THRESHOLD ne sont plus utilisés pour la génération d'étiquettes de mouvement
-NUM_CLASSES_MODEL_OUTPUT_FOMO = 1 + 1 # Pour chargement modèle phase 1 (person + background)
+GRID_HEIGHT = INPUT_HEIGHT // SPATIAL_REDUCTION
+GRID_WIDTH = INPUT_WIDTH // SPATIAL_REDUCTION
+NUM_CLASSES_MODEL_OUTPUT_FOMO = 1 + 1
 
-# La sortie du RNN est maintenant une valeur de régression unique (mouvement X)
-NUM_MOTION_OUTPUTS = 1 
-ANNOTATION_MOVE_X_NORMALIZATION_FACTOR = 3.0 # Les annotations Move_X sont attendues dans [-3, 3] et normalisées à [-1, 1] elles sont calculées comme le 95 centiles des valeurs annotées
+NUM_MOTION_OUTPUTS = 1
+ANNOTATION_MOVE_X_NORMALIZATION_FACTOR = 3.0
 
-# Hyperparamètres d'entraînement pour la phase 2
 BATCH_SIZE_STAGE2 = 8
-LEARNING_RATE_STAGE2 = 0.0005 # Peut nécessiter un ajustement pour la régression
-EPOCHS_STAGE2 = 30 # Peut nécessiter un ajustement
-RNN_TYPE_STAGE2 = 'convlstm' 
+LEARNING_RATE_STAGE2 = 0.0005
+EPOCHS_STAGE2 = 30
 
-# Configuration pour TensorBoard
-LOG_DIR = "logs/fit/" 
-if 'TENSORBOARD_LOG_DIR' in os.environ:
-    LOG_DIR = os.environ['TENSORBOARD_LOG_DIR']
+LOG_DIR = os.environ.get('TENSORBOARD_LOG_DIR', "logs/fit/")
 
-# --- Fin de la Configuration ---
+# --- End of Configuration ---
 
 def preprocess_single_frame(frame, target_shape):
     img_resized = cv2.resize(frame, (target_shape[1], target_shape[0]))
     img_normalized = img_resized.astype(np.float32) / 255.0
     return img_normalized
 
-# Les fonctions postprocess_fomo_heatmap, compute_displacements_for_sequence, 
-# et generate_motion_label ne sont plus nécessaires ici car les étiquettes proviennent des CSV.
-# Elles pourraient être conservées si utilisées ailleurs ou pour débogage, mais pour la clarté de cette modif, on les enlève de la portée directe du générateur.
-
 class VideoSequenceDataGenerator(KerasSequence):
-    def __init__(self, video_files, annotation_dir, batch_size, sequence_length, 
+    def __init__(self, video_files, annotation_dir, batch_size, sequence_length,
                  input_shape, shuffle=True):
         self.video_files = video_files
         self.annotation_dir = annotation_dir
         self.batch_size = batch_size
         self.sequence_length = sequence_length
-        self.input_shape = input_shape # Shape d'une image unique
+        self.input_shape = input_shape
         self.shuffle = shuffle
-
         self.sequences_data = self._extract_sequences_from_videos()
         self.indexes = np.arange(len(self.sequences_data))
         if self.shuffle:
             np.random.shuffle(self.indexes)
 
-    #@memory.cache # Décommentez si vous souhaitez mettre en cache cette extraction coûteuse
     def _extract_sequences_from_videos(self):
         all_sequences_with_labels = []
-        print("Extraction des séquences et des étiquettes de mouvement à partir des CSV...")
-        for i, video_path in enumerate(self.video_files):
-            # DEBUG
+        print("Extracting sequences and motion labels from CSVs...")
+        for video_path in self.video_files:
             video_filename = os.path.basename(video_path)
             video_name_without_ext = os.path.splitext(video_filename)[0]
             annotation_path = os.path.join(self.annotation_dir, f"{video_name_without_ext}_movement.csv")
 
             if not os.path.exists(annotation_path):
-                print(f"Attention: Fichier d'annotation CSV non trouvé pour {video_path} à {annotation_path}. Vidéo ignorée.")
+                print(f"Warning: CSV annotation file not found for {video_path} at {annotation_path}. Video skipped.")
                 continue
 
             try:
                 annotations_df = pd.read_csv(annotation_path)
                 if 'Move_X' not in annotations_df.columns:
-                    print(f"Attention: Colonne 'Move_X' non trouvée dans {annotation_path}. Vidéo ignorée.")
+                    print(f"Warning: 'Move_X' column not found in {annotation_path}. Video skipped.")
                     continue
                 move_x_annotations = annotations_df['Move_X'].tolist()
             except Exception as e:
-                print(f"Erreur lors de la lecture du fichier CSV {annotation_path}: {e}. Vidéo ignorée.")
+                print(f"Error reading CSV file {annotation_path}: {e}. Video skipped.")
                 continue
-            
+
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
-                print(f"Erreur: Impossible d'ouvrir la vidéo {video_path}. Vidéo ignorée.")
+                print(f"Error: Could not open video {video_path}. Video skipped.")
+                continue
+
+            frame_count_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+
+            if frame_count_video < self.sequence_length:
+                print(f"Warning: Video {video_path} is too short for sequence length {self.sequence_length}. Video skipped.")
                 continue
             
-            frame_count_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            cap.release() # Fermer immédiatement après avoir obtenu le nombre d'images
-
-            if frame_count_video == 0:
-                print(f"Attention: La vidéo {video_path} semble vide ou corrompue (0 frame). Vidéo ignorée.")
-                continue
-
-            if frame_count_video != len(move_x_annotations):
-                if len(move_x_annotations) + 1 < frame_count_video:
-                    print(f"Attention: Moins d'annotations ({len(move_x_annotations)}) que de frames ({frame_count_video}) pour {video_path}. Vidéo ignorée.")
-                    continue
-                move_x_annotations = move_x_annotations[:frame_count_video]
+            annotations_len = len(move_x_annotations)
+            if frame_count_video > annotations_len:
+                 print(f"Warning: Fewer annotations ({annotations_len}) than frames ({frame_count_video}) for {video_path}. Truncating to annotations length.")
+                 frame_count_video = annotations_len
 
             num_possible_sequences = frame_count_video - self.sequence_length + 1
-            if num_possible_sequences <= 0:
-                print(f"Attention: Pas assez de frames ({frame_count_video}) pour former une séquence de longueur {self.sequence_length} pour {video_path}. Vidéo ignorée.")
-                continue
-
             for i in range(num_possible_sequences):
-                # i est l'index de début de la séquence dans la vidéo
                 label_index = i + self.sequence_length - 1
-                if label_index < len(move_x_annotations):
-                    motion_label_value = move_x_annotations[label_index]
-                    if pd.isna(motion_label_value):
-                        print(f"Attention: Valeur NaN pour Move_X à l'index {label_index} pour la séquence commençant à {i} dans {video_path}. Séquence ignorée.")
-                        continue
-                    
-                    # S'assurer que la valeur est un float.
-                    original_value_float = float(motion_label_value)
-                    
-                    # Borner la valeur originale à [-ANNOTATION_MOVE_X_NORMALIZATION_FACTOR, ANNOTATION_MOVE_X_NORMALIZATION_FACTOR] 
-                    # pour traiter les valeurs extrêmes.
-                    clipped_original_value = np.clip(original_value_float, 
-                                                     -ANNOTATION_MOVE_X_NORMALIZATION_FACTOR, 
-                                                     ANNOTATION_MOVE_X_NORMALIZATION_FACTOR)
-                    
-                    # Normaliser la valeur de l'étiquette de mouvement pour qu'elle corresponde à la sortie tanh [-1, 1] du modèle.
-                    # En divisant la valeur (maintenant garantie d'être dans les bornes) par ANNOTATION_MOVE_X_NORMALIZATION_FACTOR.
-                    normalized_motion_value = clipped_original_value / ANNOTATION_MOVE_X_NORMALIZATION_FACTOR
-                    
-                    # La valeur est maintenant garantie d'être dans [-1, 1].
-                    motion_label = np.array([normalized_motion_value], dtype=np.float32)
-                    # Stocker le chemin, l'index de début et l'étiquette normalisée et bornée.
-                    all_sequences_with_labels.append((video_path, i, motion_label))
-                else:
-                    print(f"Attention: Index d'étiquette {label_index} hors limites pour les annotations de {video_path} (longueur {len(move_x_annotations)}). Séquence ignorée.")
-        
-        print(f"Extraction terminée. {len(all_sequences_with_labels)} séquences générées.")
+                motion_label_value = move_x_annotations[label_index]
+                if pd.isna(motion_label_value):
+                    continue
+
+                clipped_value = np.clip(float(motion_label_value), -ANNOTATION_MOVE_X_NORMALIZATION_FACTOR, ANNOTATION_MOVE_X_NORMALIZATION_FACTOR)
+                normalized_motion_value = clipped_value / ANNOTATION_MOVE_X_NORMALIZATION_FACTOR
+                motion_label = np.array([normalized_motion_value], dtype=np.float32)
+                all_sequences_with_labels.append((video_path, i, motion_label))
+
+        print(f"Extraction complete. {len(all_sequences_with_labels)} sequences generated.")
         if not all_sequences_with_labels:
-            # Ne pas lever d'erreur ici, permettre au script de continuer s'il y a plusieurs vidéos
-            # et que certaines seulement ont des problèmes. L'erreur sera levée plus tard si aucune donnée.
-            print("AVERTISSEMENT: Aucune séquence n'a pu être générée à partir des vidéos et annotations fournies.")
+            print("WARNING: No sequences could be generated from the provided videos and annotations.")
         return all_sequences_with_labels
 
     def __len__(self):
@@ -194,69 +183,32 @@ class VideoSequenceDataGenerator(KerasSequence):
 
     def __getitem__(self, index):
         batch_indexes = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
-        
         batch_sequences = []
         batch_motion_labels = []
 
         for i in batch_indexes:
             video_path, start_frame_idx, motion_label = self.sequences_data[i]
-            
-            current_sequence_frames = []
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
-                print(f"Erreur __getitem__: Impossible d'ouvrir {video_path}")
-                # Gérer l'erreur, par exemple en sautant cette séquence ou en retournant un batch plus petit
-                # Pour l'instant, on va remplir avec des zéros pour maintenir la taille du batch si possible
-                # ou lever une exception plus critique.
-                # Dans un cas réel, il faudrait une stratégie plus robuste.
-                # Ici, on va simplement sauter cette séquence pour éviter un crash.
-                continue 
+                continue
 
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_idx)
-            
-            frames_read_count = 0
+            current_sequence_frames = []
             for _ in range(self.sequence_length):
                 ret, frame = cap.read()
                 if not ret:
-                    print(f"Erreur __getitem__: Impossible de lire la frame attendue de {video_path} à l'index {start_frame_idx + frames_read_count}")
-                    # Gérer cette situation, par exemple en ne complétant pas cette séquence.
-                    break 
+                    break
                 processed_frame = preprocess_single_frame(frame, self.input_shape)
                 current_sequence_frames.append(processed_frame)
-                frames_read_count += 1
             cap.release()
 
-            if frames_read_count == self.sequence_length:
+            if len(current_sequence_frames) == self.sequence_length:
                 batch_sequences.append(np.array(current_sequence_frames))
                 batch_motion_labels.append(motion_label)
-            else:
-                # Si la séquence n'a pas pu être entièrement lue, on l'ignore pour ce batch.
-                # Cela peut arriver si la vidéo est corrompue ou plus courte qu'annoncé.
-                print(f"Avertissement __getitem__: Séquence incomplète pour {video_path} (début {start_frame_idx}), seulement {frames_read_count}/{self.sequence_length} frames lues. Séquence ignorée.")
 
-
-        if not batch_sequences: # Si aucune séquence n'a pu être chargée
-            # Retourner des tableaux vides avec les bonnes dimensions si possible, ou gérer l'erreur.
-            # Cela dépend de la robustesse souhaitée. Pour l'instant, on peut lever une erreur
-            # si le batch est vide, car cela indique un problème plus profond.
-            # Ou, si c'est en fin d'époque et que le dernier batch est plus petit, c'est normal.
-            # Cependant, si batch_indexes n'était pas vide et que batch_sequences l'est, c'est un problème.
-            if len(batch_indexes) > 0:
-                 print("Avertissement: Aucune séquence valide n'a pu être chargée pour ce batch.")
-                 # Pour éviter un crash, on pourrait retourner None ou des données vides,
-                 # mais cela pourrait masquer des problèmes.
-                 # Pour l'instant, on laisse Keras gérer un batch potentiellement vide si cela arrive,
-                 # bien que la logique actuelle tente d'éviter cela en ignorant les séquences problématiques.
-                 # Si toutes les séquences d'un batch sont problématiques, batch_sequences sera vide.
-                 # Keras pourrait ne pas aimer un batch vide.
-                 # Une solution plus sûre serait de s'assurer que __len__ reflète uniquement les batches valides
-                 # ou de filtrer les données problématiques en amont.
-
-            # Si batch_sequences est vide, retourner des tableaux vides structurés correctement.
-            # La forme de X est (batch_size, sequence_length, H, W, C)
-            # La forme de Y est (batch_size, 1) pour la régression
+        if not batch_sequences:
             empty_batch_x_shape = (0, self.sequence_length, self.input_shape[0], self.input_shape[1], self.input_shape[2])
-            empty_batch_y_shape = (0, 1) # Pour NUM_MOTION_OUTPUTS = 1
+            empty_batch_y_shape = (0, NUM_MOTION_OUTPUTS)
             return np.empty(empty_batch_x_shape), {'motion_output': np.empty(empty_batch_y_shape)}
 
         return np.array(batch_sequences), {'motion_output': np.array(batch_motion_labels)}
@@ -265,58 +217,133 @@ class VideoSequenceDataGenerator(KerasSequence):
         if self.shuffle:
             np.random.shuffle(self.indexes)
 
+def run_experiment(config, fomo_stage1_model, train_gen, val_gen):
+    """
+    Runs a single training experiment with a given configuration, with checkpointing.
+    """
+    print(f"\n{'='*20} Running Experiment: {config['name']} {'='*20}")
+    print(f"Hyperparameters: {config}")
+
+    # Define paths for this experiment's artifacts
+    experiment_dir = os.path.join(COMBINED_MODEL_SAVE_DIR, config['name'])
+    os.makedirs(experiment_dir, exist_ok=True)
+    
+    model_checkpoint_path = os.path.join(experiment_dir, f"{BASE_MODEL_SAVE_NAME}.h5")
+    epoch_file_path = os.path.join(experiment_dir, "last_epoch.txt")
+    tensorboard_log_dir = os.path.join(LOG_DIR, config['name']) # Unified log dir for the experiment
+
+    print(f"Experiment artifacts will be saved in: {experiment_dir}")
+    print(f"TensorBoard logs will be saved to: {tensorboard_log_dir}")
+
+    initial_epoch = 0
+    if os.path.exists(model_checkpoint_path):
+        print(f"Resuming training from checkpoint: {model_checkpoint_path}")
+        combined_model = tf.keras.models.load_model(model_checkpoint_path)
+        
+        if os.path.exists(epoch_file_path):
+            with open(epoch_file_path, 'r') as f:
+                try:
+                    initial_epoch = int(f.read())
+                    print(f"Resuming from epoch {initial_epoch + 1}.")
+                except ValueError:
+                    print("Warning: Could not read epoch number, starting from epoch 0.")
+    else:
+        print("Starting training from scratch.")
+        combined_model = create_fomo_td_with_rnn_combined_model(
+            input_sequence_shape=COMBINED_MODEL_INPUT_SHAPE,
+            fomo_num_classes=1,
+            motion_num_classes=NUM_MOTION_OUTPUTS,
+            fomo_alpha=FOMO_ALPHA,
+            fomo_backbone_cutoff_layer_name=FOMO_BACKBONE_CUTOFF_LAYER_NAME,
+            rnn_type=config['rnn_type'],
+            rnn_conv_lstm_filters=config['rnn_conv_lstm_filters'],
+            rnn_gru_units=config['rnn_gru_units'],
+            rnn_dense_units=config['rnn_dense_units']
+        )
+        
+        try:
+            fomo_processing_sub_model = combined_model.get_layer('time_distributed_fomo_processing').layer
+            fomo_processing_sub_model.set_weights(fomo_stage1_model.get_weights())
+            print("Successfully transferred weights from stage 1 FOMO model.")
+        except Exception as e:
+            print(f"Warning: Failed to transfer weights from stage 1 model: {e}")
+
+        fomo_processing_sub_model.trainable = False
+        print("FOMO sub-model frozen. Only the RNN head will be trained.")
+
+        combined_model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE_STAGE2),
+            loss={'motion_output': tf.keras.losses.MeanSquaredError()},
+            metrics={'motion_output': [tf.keras.metrics.MeanAbsoluteError()]}
+        )
+
+    combined_model.summary()
+
+    # Callback to save the epoch number
+    class EpochSaverCallback(tf.keras.callbacks.Callback):
+        def on_epoch_end(self, epoch, logs=None):
+            with open(epoch_file_path, 'w') as f:
+                f.write(str(epoch))
+
+    # Set up callbacks
+    monitor_metric = 'val_loss' if val_gen and val_gen.sequences_data else 'loss'
+    callbacks = [
+        tf.keras.callbacks.ModelCheckpoint(model_checkpoint_path, save_best_only=True, monitor=monitor_metric),
+        tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor_metric, factor=0.2, patience=5, min_lr=1e-6),
+        tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=10, restore_best_weights=True),
+        tf.keras.callbacks.TensorBoard(log_dir=tensorboard_log_dir, histogram_freq=1, update_freq='epoch'),
+        EpochSaverCallback()
+    ]
+
+    # Train the model
+    print(f"\nStarting/resuming training for experiment '{config['name']}'...")
+    try:
+        combined_model.fit(
+            train_gen,
+            epochs=EPOCHS_STAGE2,
+            validation_data=val_gen if val_gen and val_gen.sequences_data else None,
+            callbacks=callbacks,
+            initial_epoch=initial_epoch
+        )
+        print(f"\nTraining for experiment '{config['name']}' finished.")
+    except Exception as e:
+        print(f"\nAn error occurred during training for experiment '{config['name']}': {e}")
 
 def main_stage2_training():
-    print("Phase 2: Entraînement de la tête RNN du modèle combiné.")
+    print("Phase 2: Training the RNN head of the combined model.")
 
-    # 1. Charger le modèle FOMO de la phase 1 (pour la génération d'étiquettes)
     if not os.path.exists(STAGE1_FOMO_MODEL_PATH):
-        print(f"Erreur: Modèle FOMO de Phase 1 non trouvé à {STAGE1_FOMO_MODEL_PATH}")
+        print(f"Error: Stage 1 FOMO model not found at {STAGE1_FOMO_MODEL_PATH}")
         return
-    
-    # Le modèle FOMO de phase 1 est chargé pour le transfert de poids.
+
     fomo_stage1_model = tf.keras.models.load_model(
         STAGE1_FOMO_MODEL_PATH,
         custom_objects={'loss': fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT_FOMO)}
     )
-    print("Modèle FOMO de Phase 1 chargé (pour transfert de poids).")
+    print("Stage 1 FOMO model loaded for weight transfer.")
 
-    # 2. Préparer le générateur de données pour la phase 2
-    video_files = sorted(glob.glob(os.path.join(VIDEO_DATA_DIR, '*.mp4'))) # ou autres formats, triés pour la reproductibilité
-    # DEBUG
-    video_files = video_files[:50]
-
+    video_files = sorted(glob.glob(os.path.join(VIDEO_DATA_DIR, '*.mp4')))[:50] # DEBUG: limit files
     if not video_files:
-        print(f"Aucune vidéo trouvée dans {VIDEO_DATA_DIR} pour l'entraînement de la phase 2.")
+        print(f"No videos found in {VIDEO_DATA_DIR}.")
         return
-    
     if not os.path.isdir(ANNOTATION_DATA_DIR):
-        print(f"Erreur: Répertoire d'annotations CSV non trouvé à {ANNOTATION_DATA_DIR}")
+        print(f"Error: Annotation directory not found at {ANNOTATION_DATA_DIR}")
         return
 
-    # Diviser les fichiers vidéo pour un ensemble de validation simple (ex: 80% train, 20% val)
-    # Assurez-vous d'avoir suffisamment de vidéos pour que cela ait un sens.
-    num_videos = len(video_files)
-    if num_videos < 5: # Arbitraire, mais il faut assez de données pour spliter
-        print("Attention: Très peu de vidéos. Entraînement sans ensemble de validation dédié.")
-        train_video_files = video_files
-        val_video_files = []
-    else:
-        val_split_idx = int(num_videos * 0.8)
-        train_video_files = video_files[:val_split_idx]
-        val_video_files = video_files[val_split_idx:]
-        print(f"Utilisation de {len(train_video_files)} vidéos pour l'entraînement et {len(val_video_files)} pour la validation.")
-
+    val_split_idx = int(len(video_files) * 0.8)
+    train_video_files = video_files[:val_split_idx]
+    val_video_files = video_files[val_split_idx:]
+    print(f"Using {len(train_video_files)} videos for training and {len(val_video_files)} for validation.")
 
     train_seq_generator = VideoSequenceDataGenerator(
-        video_files=train_video_files, 
+        video_files=train_video_files,
         annotation_dir=ANNOTATION_DATA_DIR,
         batch_size=BATCH_SIZE_STAGE2,
         sequence_length=SEQUENCE_LENGTH,
-        input_shape=(INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS),
+        input_shape=INPUT_SHAPE,
         shuffle=True
     )
-    
+
     validation_seq_generator = None
     if val_video_files:
         validation_seq_generator = VideoSequenceDataGenerator(
@@ -324,121 +351,17 @@ def main_stage2_training():
             annotation_dir=ANNOTATION_DATA_DIR,
             batch_size=BATCH_SIZE_STAGE2,
             sequence_length=SEQUENCE_LENGTH,
-            input_shape=(INPUT_HEIGHT, INPUT_WIDTH, INPUT_CHANNELS),
-            shuffle=False # Pas besoin de mélanger pour la validation
+            input_shape=INPUT_SHAPE,
+            shuffle=False
         )
-    
+
     if not train_seq_generator.sequences_data:
-         print("Erreur: Aucune donnée d'entraînement n'a pu être chargée par le générateur. Vérifiez les fichiers vidéo et CSV.")
-         return
+        print("Error: No training data could be loaded. Check video and CSV files.")
+        return
 
-
-    # 3. Créer le modèle combiné FOMO-TD-RNN
-    # IMPORTANT: Assurez-vous que create_fomo_td_with_rnn_combined_model dans fomo_trainer.py
-    # est modifié pour que la tête RNN ait NUM_MOTION_OUTPUTS (1) sortie avec activation 'tanh'.
-    combined_model = create_fomo_td_with_rnn_combined_model(
-        input_sequence_shape=COMBINED_MODEL_INPUT_SHAPE,
-        fomo_num_classes=1, # NUM_OBJECT_CLASSES_FOMO (personne)
-        motion_num_classes=NUM_MOTION_OUTPUTS, # Doit être 1 pour la régression
-        fomo_alpha=FOMO_ALPHA,
-        fomo_backbone_cutoff_layer_name=FOMO_BACKBONE_CUTOFF_LAYER_NAME,
-        rnn_type=RNN_TYPE_STAGE2
-    )
-    print("Modèle combiné FOMO-TD-RNN (pour régression) créé.")
-    combined_model.summary()
-
-    # 4. Transférer les poids du modèle FOMO de phase 1 vers le sous-modèle FOMO dans TimeDistributed
-    print("Tentative de transfert des poids du modèle FOMO de phase 1...")
-    try:
-        # Le sous-modèle FOMO (backbone + tête) est encapsulé dans la couche TimeDistributed
-        time_distributed_fomo_layer = combined_model.get_layer('time_distributed_fomo_processing')
-        fomo_processing_sub_model = time_distributed_fomo_layer.layer # C'est le fomo_processing_model
-
-        # Assigner les poids du modèle FOMO de phase 1 directement au sous-modèle
-        # Cela suppose que fomo_stage1_model et fomo_processing_sub_model sont architecturalement identiques.
-        fomo_processing_sub_model.set_weights(fomo_stage1_model.get_weights())
-        print("Poids du modèle FOMO de phase 1 transférés au sous-modèle FOMO du modèle combiné.")
-
-    except Exception as e:
-        print(f"Avertissement: Erreur lors du transfert des poids du modèle FOMO de phase 1: {e}")
-        print("L'entraînement de la phase 2 commencera avec un sous-modèle FOMO initialisé aléatoirement (ou pré-entraîné ImageNet).")
-
-
-    # 5. Geler les couches du sous-modèle FOMO (qui est dans TimeDistributed)
-    print("Gel du sous-modèle FOMO (partie TimeDistributed)...")
-    fomo_processing_sub_model_to_freeze = combined_model.get_layer('time_distributed_fomo_processing').layer
-    fomo_processing_sub_model_to_freeze.trainable = False
-    
-    # La sortie 'fomo_output' du modèle combiné est une couche Lambda et n'a pas de poids à geler.
-    # Les couches produisant les données pour cette sortie sont dans fomo_processing_sub_model_to_freeze.
-    
-    print("Sous-modèle FOMO gelé. Seule la tête RNN sera entraînée initialement.")
-    # Vérifier le statut des couches entraînables
-    # for layer in combined_model.layers:
-    #     print(f"Layer: {layer.name}, Trainable: {layer.trainable}")
-    # combined_model.summary() # Pour voir les paramètres entraînables
-
-    # 6. Compiler le modèle combiné pour l'entraînement de la tête RNN
-    # Nous ne fournissons une perte que pour la sortie 'motion_output'.
-    # Pour la sortie 'fomo_output' qui est gelée, nous pouvons spécifier None comme perte.
-    combined_model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE_STAGE2),
-        loss={
-            'fomo_output': None,  # Pas de perte calculée pour la sortie FOMO gelée
-            'motion_output': tf.keras.losses.MeanSquaredError() # Perte pour la régression
-        },
-        # loss_weights={'fomo_output': 0.0, 'motion_output': 1.0}, # Explicitement si besoin
-        metrics={'motion_output': [tf.keras.metrics.MeanAbsoluteError()]} # Métrique pour la régression
-    )
-
-    # 7. Entraîner le modèle (principalement la tête RNN)
-    print("Début de l'entraînement de la phase 2 (tête RNN pour régression)...")
-    
-    monitor_metric = 'val_loss' if validation_seq_generator and validation_seq_generator.sequences_data else 'loss'
-    if not (validation_seq_generator and validation_seq_generator.sequences_data):
-        print("Attention: Pas de données de validation, ModelCheckpoint et EarlyStopping surveilleront 'loss'.")
-
-    # Créer le callback TensorBoard
-    import datetime
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(
-        log_dir=os.path.join(LOG_DIR, datetime.datetime.now().strftime("%Y%m%d-%H%M%S")), 
-        histogram_freq=1
-    )
-
-    try:
-        combined_model.fit(
-            train_seq_generator,
-            epochs=EPOCHS_STAGE2,
-            validation_data=validation_seq_generator if validation_seq_generator and validation_seq_generator.sequences_data else None,
-            callbacks=[
-                tf.keras.callbacks.ModelCheckpoint(COMBINED_MODEL_SAVE_PATH, save_best_only=True, monitor=monitor_metric),
-                tf.keras.callbacks.ReduceLROnPlateau(monitor=monitor_metric, factor=0.2, patience=5, min_lr=0.00001), # Augmenté patience
-                tf.keras.callbacks.EarlyStopping(monitor=monitor_metric, patience=10, restore_best_weights=True), # Augmenté patience
-                tensorboard_callback # Ajout du callback TensorBoard
-            ]
-        )
-        print("Entraînement de la phase 2 terminé.")
-        print(f"Modèle combiné sauvegardé dans {COMBINED_MODEL_SAVE_PATH}")
-    except Exception as e:
-        print(f"Erreur durant l'entraînement de la phase 2: {e}")
-        # Lever l'exception pour un débogage plus facile si nécessaire
-        # raise e 
-
-    # Optionnel: Phase de Fine-tuning
-    # Dégelez quelques couches supérieures du backbone et ré-entraînez avec un learning rate plus faible.
-    # print("Début du fine-tuning du modèle combiné...")
-    # fomo_backbone_combined.trainable = True # Dégeler tout le backbone
-    # # Ou dégeler sélectivement les dernières couches du backbone
-    # # for layer in fomo_backbone_combined.layers[-N:]: # Dégeler les N dernières couches
-    # #    layer.trainable = True
-    #
-    # combined_model.compile(
-    #     optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE_STAGE2 / 10), # LR plus faible
-    #     loss={'motion_output': 'categorical_crossentropy'},
-    #     metrics={'motion_output': ['accuracy']}
-    # )
-    # combined_model.fit(...) # Entraîner pour quelques époques de plus
-
+    # Run all defined experiments
+    for exp_config in EXPERIMENTS:
+        run_experiment(exp_config, fomo_stage1_model, train_seq_generator, validation_seq_generator)
 
 if __name__ == '__main__':
     main_stage2_training()
