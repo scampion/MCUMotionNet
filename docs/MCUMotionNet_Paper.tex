@@ -2,10 +2,13 @@
 \usepackage{graphicx}
 \usepackage{amsmath}
 \usepackage{geometry}
+\usepackage{tikz}
+\usepackage{hyperref}
+\usetikzlibrary{shapes.geometric, arrows, positioning, fit, calc}
 \geometry{a4paper, margin=1in}
 
 \title{MCUMotionNet: A Lightweight, Two-Stage Architecture for Real-Time Object Tracking on Memory-Constrained Microcontrollers}
-\author{Gemini AI Assistant \\ \texttt{On behalf of the project developers}}
+\author{Sébastien Campion}
 \date{\today}
 
 \begin{document}
@@ -21,7 +24,7 @@ The Internet of Things (IoT) has led to an explosion of smart devices, creating 
 
 While TinyML has seen success in applications like keyword spotting and simple anomaly detection, tasks involving real-time video streams, such as object tracking, have remained largely out of reach. Traditional deep learning models for object detection and tracking are notoriously resource-intensive. This paper addresses the challenge of implementing a real-time, video-based tracking system on a severely constrained MCU, specifically targeting an ESP32-S3 with under 512KB of available RAM.
 
-Our use case is the automated control of a camera turret designed to follow a player during a handball match. This requires not only detecting the player in each frame but also understanding their motion over time to predict the correct camera movement. To solve this, we propose MCUMotionNet, a specialized neural network architecture that combines efficient object detection with temporal sequence processing. The key contributions of this work are:
+Our use case is the automated control of a camera turret designed to follow a player during a handball match. This requires not only detecting the player in each frame but also understanding their motion over time to predict the correct camera movement. To solve this, we propose MCUMotionNet, a specialized neural network architecture that combines efficient object detection with temporal sequence processing.\footnote{The source code for this project is available at: \url{https://github.com/scampion/MCUMotionNet}} The key contributions of this work are:
 \begin{itemize}
     \item A novel two-stage architecture combining a MobileNetV2-FOMO detector with a lightweight RNN head for motion prediction.
     \item A demonstration of a complete system for real-time object tracking suitable for memory-constrained MCUs.
@@ -38,7 +41,72 @@ Our work builds upon several key advancements in efficient deep learning.
 \textbf{TinyML:} The field of TinyML is dedicated to optimizing machine learning models and systems for deployment on microcontrollers. This involves techniques like quantization, pruning, and the design of novel, hardware-aware neural network architectures. Several surveys document the rapid progress and challenges in this domain \cite{tinyml_survey_1, tinyml_survey_2}. MCUMotionNet is a practical application of TinyML principles to the complex problem of video analysis.
 
 \section{MCUMotionNet Architecture}
-MCUMotionNet is a two-stage, multi-head model designed to process a sequence of images and produce two distinct outputs: an object detection heatmap for the current frame and a motion prediction value based on the sequence. The architecture is detailed in the `create_fomo_td_with_rnn_combined_model` function in our codebase.
+MCUMotionNet is a two-stage, multi-head model designed to process a sequence of images and produce two distinct outputs: an object detection heatmap for the current frame and a motion prediction value based on the sequence. The architecture is detailed in the `create_fomo_td_with_rnn_combined_model` function in our codebase and visualized in Figure \ref{fig:architecture}.
+
+\begin{figure}[h!]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    node distance=0.5cm and 1.5cm,
+    block/.style={rectangle, draw, fill=blue!20, text width=8em, text centered, rounded corners, minimum height=4em},
+    smallblock/.style={rectangle, draw, fill=green!20, text width=7em, text centered, rounded corners, minimum height=3em},
+    arrow/.style={thick,->,>=stealth},
+    line/.style={thick,-},
+    io/.style={trapezium, trapezium left angle=70, trapezium right angle=110, draw, fill=orange!20, text width=6em, text centered, minimum height=3em},
+    container/.style={rectangle, draw, dashed, inner sep=0.5cm}
+]
+
+% Nodes
+
+\node[io] (input) {Input Sequence (10, 96, 96, 3)};
+
+% TimeDistributed FOMO Model
+
+\node[block, right=of input] (td_fomo) {TimeDistributed FOMO Model};
+
+\node[smallblock, above=of td_fomo, yshift=-0.5cm] (fomo_backbone) {MobileNetV2 Backbone (frozen)};
+
+\node[smallblock, below=of td_fomo, yshift=0.5cm] (fomo_head) {FOMO Head (Conv2D)};
+
+% Dashed box for the sub-model
+
+\node[container, fit=(fomo_backbone) (td_fomo) (fomo_head), label={[yshift=0.2cm]above:FOMO Processing Sub-Model}] (fomo_container) {};
+
+\draw[arrow] (input) -- (td_fomo);
+
+% Sequence Output
+
+\node[io, right=of td_fomo] (seq_output) {Heatmap Sequence (10, 24, 24, 2)};
+\draw[arrow] (td_fomo) -- (seq_output);
+
+% Branch 1: FOMO Output
+
+\node[block, above right=of seq_output] (lambda) {Extract Last Frame};
+
+\node[io, right=of lambda] (fomo_output) {FOMO Output (24, 24, 2)};
+\draw[arrow] (seq_output) -- (lambda);
+\draw[arrow] (lambda) -- (fomo_output);
+
+% Branch 2: Motion Prediction
+
+\node[block, below right=of seq_output] (convlstm) {ConvLSTM2D};
+
+\node[smallblock, right=of convlstm] (flatten) {Flatten};
+
+\node[smallblock, right=of flatten] (dense) {Dense (ReLU)};
+
+\node[io, right=of dense] (motion_output) {Motion Output (1)};
+
+\draw[arrow] (seq_output) -- (convlstm);
+\draw[arrow] (convlstm) -- (flatten);
+\draw[arrow] (flatten) -- (dense);
+\draw[arrow] (dense) -- (motion_output);
+
+\end{tikzpicture}
+}
+\caption{The MCUMotionNet architecture. A TimeDistributed FOMO model processes an input sequence of 10 frames. The output splits into two heads: one extracts the final FOMO heatmap for object detection, and the other uses a ConvLSTM2D layer to process the full sequence for motion prediction.}
+\label{fig:architecture}
+\end{figure}
 
 \subsection{Stage 1: FOMO-based Person Detector}
 The first stage is a person detector based on the FOMO architecture. It is designed to be applied to each frame of an input video sequence.
@@ -130,3 +198,5 @@ arXiv preprint arXiv:2402.17796.
 \end{thebibliography}
 
 \end{document}
+
+
