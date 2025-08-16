@@ -7,7 +7,7 @@ import datetime # Import datetime for timestamped logs
 from fomo_trainer import create_fomo_model, fomo_loss_function, FomoDataGenerator
 
 # --- Configuration ---
-DATA_BASE_DIR = 'data/sport_MOT_sample'
+DATA_BASE_DIR = 'data/sport_MOT_full'
 PERSON_CLASS_ID = 0  # Assuming 'person' is class 0 in annotation files
 NUM_OBJECT_CLASSES = 1  # We are only detecting one class: 'person'
 

@@ -4,7 +4,7 @@ from tensorflow.keras import layers
 import numpy as np
 import math
 
-# Dictionary of known MobileNetV2 layer names for backbone cutoff and their corresponding spatial reduction factors
+# Dictionary of known MobilNetV2 layer names for backbone cutoff and their corresponding spatial reduction factors
 _known_cutoffs = {
     'expanded_conv_project_BN': 2,   # Results in 1/2 spatial reduction (e.g., 96x96 -> 48x48)
     'block_3_expand_relu': 4,       # Results in 1/4 spatial reduction (e.g., 96x96 -> 24x24)
@@ -378,8 +378,16 @@ def create_fomo_rnn_combined_model(
         input_shape=single_image_input_shape,
         alpha=fomo_alpha,
         include_top=False,
-        weights='imagenet'
+        weights=None
     )
+
+    backbone.load_weights('mobilenet_v2.weights.h5')
+
+
+
+
+
+    
     try:
         backbone_output_tensor = base_mobilenetv2.get_layer(fomo_backbone_cutoff_layer_name).output
     except ValueError:
@@ -471,8 +479,12 @@ def create_fomo_td_with_rnn_combined_model(
         input_tensor=fomo_sub_input, # Important: utiliser input_tensor pour connecter
         alpha=fomo_alpha,
         include_top=False,
-        weights='imagenet'
+        weights=None
     )
+    base_mobilenetv2_sub.load_weights('mobilenet_v2.weights.h5')
+
+
+
     try:
         fomo_backbone_output_sub = base_mobilenetv2_sub.get_layer(fomo_backbone_cutoff_layer_name).output
     except ValueError:
