@@ -6,6 +6,7 @@ import tensorflow as tf
 import math
 import json
 import pandas as pd # Ajout de pandas pour lire les CSV
+import argparse
 from tensorflow.keras.utils import Sequence as KerasSequence
 from joblib import Memory
 import datetime
@@ -111,7 +112,7 @@ EPOCHS_STAGE2 = 30
 RNN_TYPE_STAGE2 = 'convlstm' 
 
 # Configuration pour TensorBoard
-LOG_DIR = "logs/fit2/" 
+LOG_DIR = "logs/fit/" # Default, will be updated in main
 if 'TENSORBOARD_LOG_DIR' in os.environ:
     LOG_DIR = os.environ['TENSORBOARD_LOG_DIR']
 
@@ -326,7 +327,30 @@ def run_experiment(config, fomo_stage1_model, train_gen, val_gen):
         print(f"\nAn error occurred during training for experiment '{config['name']}': {e}")
 
 def main_stage2_training():
-    print("Phase 2: Training the RNN head of the combined model.")
+    global LOG_DIR
+    
+    parser = argparse.ArgumentParser(description="Train the RNN head of the combined model (Stage 2).")
+    
+    parser.add_argument('--num-videos', type=int, default=1000,
+                        help='Number of videos to use for training and validation. Defaults to 1000.')
+    
+    experiment_names = [exp['name'] for exp in EXPERIMENTS]
+    parser.add_argument('--experiment-name', type=str, default='all',
+                        choices=experiment_names + ['all'],
+                        help='Name of the experiment to run. Use "all" to run all experiments. '
+                             f"Available: {', '.join(experiment_names)}. Defaults to 'all'.")
+
+    args = parser.parse_args()
+    num_videos = args.num_videos
+    experiment_name = args.experiment_name
+
+    print("--- Phase 2: Training the RNN head of the combined model ---")
+    print(f"Configuration: Using {num_videos} videos, Experiment: '{experiment_name}'")
+
+    # --- Update Log Directory based on number of videos ---
+    if 'TENSORBOARD_LOG_DIR' not in os.environ:
+        LOG_DIR = f"logs/fit_{num_videos}/"
+    print(f"TensorBoard log directory will be based in: {LOG_DIR}")
 
     if not os.path.exists(STAGE1_FOMO_MODEL_PATH):
         print(f"Error: Stage 1 FOMO model not found at {STAGE1_FOMO_MODEL_PATH}")
@@ -337,7 +361,9 @@ def main_stage2_training():
         custom_objects={'loss': fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT_FOMO)}
     )
     print("Stage 1 FOMO model loaded for weight transfer.")
-    video_files = sorted(glob.glob(os.path.join(VIDEO_DATA_DIR, '*.mp4')))[:50] # DEBUG: limit files
+    
+    all_video_files = sorted(glob.glob(os.path.join(VIDEO_DATA_DIR, '*.mp4')))
+    video_files = all_video_files[:num_videos]
 
     if not video_files:
         print(f"No videos found in {VIDEO_DATA_DIR}.")
@@ -375,9 +401,20 @@ def main_stage2_training():
         print("Error: No training data could be loaded. Check video and CSV files.")
         return
 
-    # Run all defined experiments
-    for exp_config in EXPERIMENTS:
+    # --- Experiment Selection ---
+    if experiment_name == 'all':
+        print("\nRunning all experiments...")
+        experiments_to_run = EXPERIMENTS
+    else:
+        experiments_to_run = [exp for exp in EXPERIMENTS if exp['name'] == experiment_name]
+        print(f"\nRunning selected experiment: {experiments_to_run[0]['name']}")
+
+    # Run selected experiments
+    for exp_config in experiments_to_run:
         run_experiment(exp_config, fomo_stage1_model, train_seq_generator, validation_seq_generator)
+
+
+
 
 if __name__ == '__main__':
     main_stage2_training()
