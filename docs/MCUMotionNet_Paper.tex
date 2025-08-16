@@ -41,7 +41,7 @@ Our work builds upon several key advancements in efficient deep learning.
 \textbf{TinyML:} The field of TinyML is dedicated to optimizing machine learning models and systems for deployment on microcontrollers. This involves techniques like quantization, pruning, and the design of novel, hardware-aware neural network architectures. Several surveys document the rapid progress and challenges in this domain \cite{tinyml_survey_1, tinyml_survey_2}. MCUMotionNet is a practical application of TinyML principles to the complex problem of video analysis.
 
 \section{MCUMotionNet Architecture}
-MCUMotionNet is a two-stage, multi-head model designed to process a sequence of images and produce two distinct outputs: an object detection heatmap for the current frame and a motion prediction value based on the sequence. The architecture is detailed in the `create_fomo_td_with_rnn_combined_model` function in our codebase and visualized in Figure \ref{fig:architecture}.
+MCUMotionNet is a two-stage, multi-head model designed to process a sequence of images and produce two distinct outputs: an object detection heatmap for the current frame and a motion prediction value based on the sequence. The architecture is detailed in the \texttt{create\_fomo\_td\_with\_rnn\_combined\_model} function in our codebase and visualized in Figure \ref{fig:architecture}.
 
 \begin{figure}[h!]
 \centering
@@ -111,7 +111,7 @@ MCUMotionNet is a two-stage, multi-head model designed to process a sequence of 
 \subsection{Stage 1: FOMO-based Person Detector}
 The first stage is a person detector based on the FOMO architecture. It is designed to be applied to each frame of an input video sequence.
 \begin{itemize}
-    \item \textbf{Backbone:} We use a MobileNetV2 model with a width multiplier (`alpha`) of 0.35 as the feature extractor. To keep the model small and increase the output resolution of the feature map, we truncate the backbone at the `block_3_expand_relu` layer. This results in a feature map with a spatial reduction factor of 4 (e.g., a 96x96 image produces a 24x24 feature map).
+    \item \textbf{Backbone:} We use a MobileNetV2 model with a width multiplier (`alpha`) of 0.35 as the feature extractor. To keep the model small and increase the output resolution of the feature map, we truncate the backbone at the \texttt{block\_3\_expand\_relu} layer. This results in a feature map with a spatial reduction factor of 4 (e.g., a 96x96 image produces a 24x24 feature map).
     \item \textbf{Head:} A simple convolutional head is attached to the backbone output. It consists of a 1x1 convolution to process the features, followed by another 1x1 convolution that produces a final heatmap. This heatmap has dimensions corresponding to the feature map grid (e.g., 24x24), with a channel depth equal to the number of classes plus one for the background. Each cell in the grid represents a classification of whether an object's centroid is present at that location.
 \end{itemize}
 This entire FOMO model is encapsulated in a `TimeDistributed` layer, allowing it to be applied independently to each of the 10 frames in the input sequence.
@@ -136,7 +136,7 @@ The training is performed in two stages. First, the FOMO person detector is trai
 All Stage 2 training experiments were conducted on the Leonardo EuroHPC supercomputer.
 
 \subsection{Dataset and Preprocessing}
-The training data consists of `.mp4` video files from handball matches. For each video, a corresponding `.csv` file provides frame-by-frame annotations for the required camera motion. The `Move_X` column from the CSV is used as the ground truth label for our motion prediction task. This value is clipped and normalized to the range [-1, 1].
+The training data consists of `.mp4` video files from handball matches. For each video, a corresponding `.csv` file provides frame-by-frame annotations for the required camera motion. The \texttt{Move\_X} column from the CSV is used as the ground truth label for our motion prediction task. This value is clipped and normalized to the range [-1, 1].
 
 Input frames are resized to 96x96 pixels and normalized. The model takes sequences of 10 consecutive frames as input.
 
@@ -162,7 +162,7 @@ extra\_large\_rnn & 32 & 32 & TBD & TBD \\ \hline
 \end{table}
 
 \section{Results and Discussion}
-The training logs for the experiments listed in Table \ref{tab:experiments} were generated on the Leonardo supercomputer and are stored in the `logs_leo/` directory. A full quantitative analysis requires parsing these TensorBoard event files to extract the final validation metrics (e.g., Mean Absolute Error) and calculating the precise final model size for each configuration after quantization.
+The training logs for the experiments listed in Table \ref{tab:experiments} were generated on the Leonardo supercomputer and are stored in the \texttt{logs\_leo/} directory. A full quantitative analysis requires parsing these TensorBoard event files to extract the final validation metrics (e.g., Mean Absolute Error) and calculating the precise final model size for each configuration after quantization.
 
 However, the experimental design allows us to discuss the expected trade-offs. The "extra\_small\_rnn" configuration is expected to produce the smallest and fastest model, making it the most likely candidate to fit within the strict 512KB RAM limit of the target MCU. As we move towards the "extra\_large\_rnn" configuration, the model's capacity to learn complex temporal patterns increases, which should lead to lower validation error and more accurate tracking. This increased complexity, however, comes at the cost of a larger model size and higher computational requirements.
 
@@ -176,7 +176,7 @@ The work demonstrates a clear path toward enabling sophisticated, real-time vide
 \begin{thebibliography}{9}
 
 \bibitem{mobilenetv2}
-Sandler, M., Howard, A., Zhu, M., Zhmoginov, A., & Chen, L. C. (2018).
+Sandler, M., Howard, A., Zhu, M., Zhmoginov, A., \& Chen, L. C. (2018).
 \textit{MobileNetV2: Inverted Residuals and Linear Bottlenecks}.
 arXiv preprint arXiv:1801.04381.
 
@@ -186,7 +186,7 @@ Edge Impulse. (2022).
 Retrieved from Edge Impulse official documentation and blog.
 
 \bibitem{tinyml_survey_1}
-Cai, H., Gan, C., & Han, S. (2024).
+Cai, H., Gan, C., \& Han, S. (2024).
 \textit{From Tiny Machine Learning to Tiny Deep Learning: A Survey}.
 arXiv preprint arXiv:2405.07722.
 
