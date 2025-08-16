@@ -234,20 +234,20 @@ class VideoSequenceDataGenerator(KerasSequence):
         if self.shuffle:
             np.random.shuffle(self.indexes)
 
-def run_experiment(config, fomo_stage1_model, train_gen, val_gen):
+def run_experiment(config, fomo_stage1_model, train_gen, val_gen, num_videos):
     """
     Runs a single training experiment with a given configuration, with checkpointing.
     """
-    print(f"\n{'='*20} Running Experiment: {config['name']} {'='*20}")
+    print(f"\n{'='*20} Running Experiment: {config['name']} ({num_videos} videos) {'='*20}")
     print(f"Hyperparameters: {config}")
 
-    # Define paths for this experiment's artifacts
-    experiment_dir = os.path.join(COMBINED_MODEL_SAVE_DIR, config['name'])
+    # Define paths for this experiment's artifacts, including the number of videos
+    experiment_dir = os.path.join(COMBINED_MODEL_SAVE_DIR, f"{config['name']}_{num_videos}vids")
     os.makedirs(experiment_dir, exist_ok=True)
     
     model_checkpoint_path = os.path.join(experiment_dir, f"{BASE_MODEL_SAVE_NAME}.h5")
     epoch_file_path = os.path.join(experiment_dir, "last_epoch.txt")
-    tensorboard_log_dir = os.path.join(LOG_DIR, config['name']) # Unified log dir for the experiment
+    tensorboard_log_dir = os.path.join(LOG_DIR, config['name']) # Log dir already contains video count
 
     print(f"Experiment artifacts will be saved in: {experiment_dir}")
     print(f"TensorBoard logs will be saved to: {tensorboard_log_dir}")
@@ -411,7 +411,7 @@ def main_stage2_training():
 
     # Run selected experiments
     for exp_config in experiments_to_run:
-        run_experiment(exp_config, fomo_stage1_model, train_seq_generator, validation_seq_generator)
+        run_experiment(exp_config, fomo_stage1_model, train_seq_generator, validation_seq_generator, num_videos)
 
 
 

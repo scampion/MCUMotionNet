@@ -4,9 +4,10 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --time=7-00:00:00
+#SBATCH --time=4-00:00:00
 #SBATCH --partition=boost_usr_prod
-#SBATCH --account=130447
+#SBATCH --qos=boost_qos_lprod
+#SBATCH --account=aifac_p01_168  # <-- IMPORTANT: Please replace with your account ID
 #SBATCH --output=logs/slurm/stage2_training_%j.out
 #SBATCH --error=logs/slurm/stage2_training_%j.err
 
