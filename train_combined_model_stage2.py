@@ -64,10 +64,19 @@ ANNOTATION_DATA_DIR = '/Users/scampion/src/sport_video_scrapper/camera_movement_
 VIDEO_DATA_DIR = os.environ.get("VIDEO_DATA_DIR", VIDEO_DATA_DIR)
 ANNOTATION_DATA_DIR = os.environ.get("ANNOTATION_DATA_DIR", ANNOTATION_DATA_DIR)
 
+
 STAGE1_FOMO_MODEL_PATH = 'person_detector_fomo.h5'
 BASE_MODEL_SAVE_NAME = 'fomo_td_rnn_regression_stage2'
 
 COMBINED_MODEL_SAVE_DIR = os.environ.get('COMBINED_MODEL_SAVE_DIR', '.')
+
+if 'COMBINED_MODEL_SAVE_DIR' in os.environ:
+    COMBINED_MODEL_SAVE_DIR = os.environ['COMBINED_MODEL_SAVE_DIR']
+    if not os.path.exists(COMBINED_MODEL_SAVE_DIR):
+        os.makedirs(COMBINED_MODEL_SAVE_DIR)
+    COMBINED_MODEL_SAVE_PATH = os.path.join(COMBINED_MODEL_SAVE_DIR, COMBINED_MODEL_SAVE_PATH)
+
+
 
 INPUT_HEIGHT = 96
 INPUT_WIDTH = 96
@@ -99,9 +108,15 @@ BATCH_SIZE_STAGE2 = 8
 LEARNING_RATE_STAGE2 = 0.0005
 EPOCHS_STAGE2 = 30
 
-LOG_DIR = os.environ.get('TENSORBOARD_LOG_DIR', "logs/fit/")
+RNN_TYPE_STAGE2 = 'convlstm' 
+
+# Configuration pour TensorBoard
+LOG_DIR = "logs/fit2/" 
+if 'TENSORBOARD_LOG_DIR' in os.environ:
+    LOG_DIR = os.environ['TENSORBOARD_LOG_DIR']
 
 # --- End of Configuration ---
+
 
 def preprocess_single_frame(frame, target_shape):
     img_resized = cv2.resize(frame, (target_shape[1], target_shape[0]))
@@ -174,6 +189,7 @@ class VideoSequenceDataGenerator(KerasSequence):
                 all_sequences_with_labels.append((video_path, i, motion_label))
 
         print(f"Extraction complete. {len(all_sequences_with_labels)} sequences generated.")
+
         if not all_sequences_with_labels:
             print("WARNING: No sequences could be generated from the provided videos and annotations.")
         return all_sequences_with_labels
@@ -321,8 +337,8 @@ def main_stage2_training():
         custom_objects={'loss': fomo_loss_function(num_classes_with_background=NUM_CLASSES_MODEL_OUTPUT_FOMO)}
     )
     print("Stage 1 FOMO model loaded for weight transfer.")
-
     video_files = sorted(glob.glob(os.path.join(VIDEO_DATA_DIR, '*.mp4')))[:50] # DEBUG: limit files
+
     if not video_files:
         print(f"No videos found in {VIDEO_DATA_DIR}.")
         return
