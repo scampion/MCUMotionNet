@@ -4,6 +4,8 @@
 \usepackage{geometry}
 \usepackage{tikz}
 \usepackage{hyperref}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
 \usetikzlibrary{shapes.geometric, arrows, positioning, fit, calc}
 \geometry{a4paper, margin=1in}
 
@@ -136,7 +138,9 @@ The training is performed in two stages. First, the FOMO person detector is trai
 All Stage 2 training experiments were conducted on the Leonardo EuroHPC supercomputer.
 
 \subsection{Dataset and Preprocessing}
-The training data consists of `.mp4` video files from handball matches. For each video, a corresponding `.csv` file provides frame-by-frame annotations for the required camera motion. The \texttt{Move\_X} column from the CSV is used as the ground truth label for our motion prediction task. This value is clipped and normalized to the range [-1, 1].
+The training data was created by extracting short video clips of handball matches from the sport.video platform\footnote{\url{https://sport.video}}. These clips, typically lasting a few seconds, capture dynamic player movements suitable for training a motion tracking model. An example of a source video can be found at \url{https://sport.video/slovnaft-handball-extraliga/play-off-207000002/hkm-sala-vs-msk-povazska-bystrica-207000042/v310a08f9c-575b-4c5a-bf38-d3ddfcb575d9}.
+
+To generate the ground truth for camera motion, we developed a data preparation pipeline using the script found at \texttt{preparation/compute\_camera\_movement.py}. This script processes each video clip to estimate the global camera movement between consecutive frames. It employs the Lucas-Kanade optical flow algorithm (\texttt{cv2.calcOpticalFlowPyrLK}) on a set of tracked feature points to calculate the average horizontal (\texttt{Move\_X}) and vertical (\texttt{Move\_Y}) displacement. This displacement vector represents the motion required to stabilize the frame, and thus serves as the supervision signal for training the RNN head to predict camera adjustments. The \texttt{Move\_X} value is clipped and normalized to the range [-1, 1] to serve as the final ground truth label. The complete dataset, containing the video sequences and their corresponding motion annotation files, is publicly available on Hugging Face\footnote{\url{https://huggingface.co/datasets/scampion/handball_video_sequences}}.
 
 Input frames are resized to 96x96 pixels and normalized. The model takes sequences of 10 consecutive frames as input.
 
@@ -162,7 +166,45 @@ extra\_large\_rnn & 32 & 32 & TBD & TBD \\ \hline
 \end{table}
 
 \section{Results and Discussion}
-The training logs for the experiments listed in Table \ref{tab:experiments} were generated on the Leonardo supercomputer and are stored in the \texttt{logs\_leo/} directory. A full quantitative analysis requires parsing these TensorBoard event files to extract the final validation metrics (e.g., Mean Absolute Error) and calculating the precise final model size for each configuration after quantization.
+The training logs for the experiments listed in Table ef{tab:experiments} were generated on the Leonardo supercomputer and are stored in the \texttt{\detokenize{logs_leo/}} directory. A full quantitative analysis requires parsing these TensorBoard event files to extract the final validation metrics (e.g., Mean Absolute Error) and calculating the precise final model size for each configuration after quantization.
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    title={Validation MAE for small\_rnn\_lstm\_filters\_4\_dense\_8},
+    xlabel={Epoch},
+    ylabel={Mean Absolute Error},
+    grid=major,
+    legend pos=north east,
+    title style={font=\small},
+    tick label style={font=\small},
+    label style={font=\small},
+    legend style={font=\small}
+]
+\addplot[
+    color=blue,
+    mark=*,
+]
+coordinates {
+    (1, 0.329065)
+    (2, 0.328398)
+    (3, 0.328363)
+    (4, 0.328348)
+    (5, 0.328414)
+    (6, 0.328414)
+    (7, 0.328401)
+    (8, 0.328349)
+    (9, 0.328359)
+    (10, 0.328346)
+};
+\legend{500 videos}
+\end{axis}
+\end{tikzpicture}
+\caption{Validation Mean Absolute Error over training steps for the `small\_rnn` configuration with 500 training videos.}
+\label{fig:validation_mae_small_rnn}
+\end{figure}
+
 
 However, the experimental design allows us to discuss the expected trade-offs. The "extra\_small\_rnn" configuration is expected to produce the smallest and fastest model, making it the most likely candidate to fit within the strict 512KB RAM limit of the target MCU. As we move towards the "extra\_large\_rnn" configuration, the model's capacity to learn complex temporal patterns increases, which should lead to lower validation error and more accurate tracking. This increased complexity, however, comes at the cost of a larger model size and higher computational requirements.
 
