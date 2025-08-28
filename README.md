@@ -165,7 +165,7 @@ To deploy on ESP32-S3:
 
 Watch the system in action:
 
-[![MCUMotionNet Demo](thumbnail.png)](https://github.com/scampion/MCUMotionNet/raw/refs/heads/main/visualization.webm)) 
+[![MCUMotionNet Demo](thumbnail.png)](https://github.com/scampion/MCUMotionNet/raw/refs/heads/main/visualization.webm)
 
 The video demonstrates:
 - Real-time person detection using the FOMO-based approach
