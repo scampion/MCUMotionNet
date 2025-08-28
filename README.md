@@ -63,9 +63,21 @@ python download_weight.py
 
 The training dataset consists of handball video sequences with camera movement annotations. The dataset is available on Hugging Face:
 
+**Dataset URL**: https://huggingface.co/datasets/scampion/handball_video_sequences
+
+To download and use the dataset, you can use the Hugging Face `datasets` library:
+
+```python
+from datasets import load_dataset
+
+# Load the dataset
+dataset = load_dataset("scampion/handball_video_sequences")
+```
+
+Or use git to clone the repository:
+
 ```bash
-# Download dataset from Hugging Face
-# (Add specific download instructions here)
+git clone https://huggingface.co/datasets/scampion/handball_video_sequences
 ```
 
 ## Training
