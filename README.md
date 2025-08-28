@@ -148,6 +148,34 @@ To deploy on ESP32-S3:
 2. Convert to a format compatible with your microcontroller framework
 3. Flash the model and inference code to the device
 
+## Video Demo
+
+Watch the system in action:
+
+https://github.com/your-username/MCUMotionNet/blob/main/visualization.mp4
+
+*(Note: Replace "your-username" with the actual GitHub username or organization name)*
+
+To view the demo video:
+1. Download the `visualization.mp4` file from the repository
+2. Or click the link above to view it directly on GitHub
+
+The video demonstrates:
+- Real-time person detection using the FOMO-based approach
+- Camera motion prediction for keeping targets in frame
+- Performance on resource-constrained hardware
+
+## Video Demo
+
+Watch the system in action:
+
+![MCUMotionNet Demo](visualization.mp4)
+
+The video demonstrates:
+- Real-time person detection using the FOMO-based approach
+- Camera motion prediction for keeping targets in frame
+- Performance on resource-constrained hardware
+
 ## Results
 
 Training results and model performance metrics are stored in the `results/` directory. Use TensorBoard to visualize training progress:
