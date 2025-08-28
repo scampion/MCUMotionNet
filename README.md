@@ -10,6 +10,18 @@ MCUMotionNet is a lightweight, two-stage deep learning architecture designed for
 - **Supercomputer Training**: Models trained on Leonardo EuroHPC infrastructure
 - **Grayscale Support**: Optional grayscale processing for reduced computational requirements
 
+## Hardware Platform
+
+MCUMotionNet is designed to run on the ESP32-S3 microcontroller:
+
+![ESP32-S3 Development Board](IMG_2788.jpg)
+
+The ESP32-S3 features:
+- Dual-core Xtensa LX7 processor up to 240 MHz
+- 512KB SRAM (sufficient for MCUMotionNet)
+- Integrated Wi-Fi and Bluetooth
+- Multiple peripheral interfaces for camera connectivity
+
 ## Architecture Overview
 
 MCUMotionNet consists of two main components:
