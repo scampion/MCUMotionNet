@@ -60,10 +60,20 @@ def convert_tb_data(root_dir, sort_by=None):
 
 
 if __name__ == "__main__":
-    dir_path = "./logs_leo/fit_500/small_rnn_lstm_filters_4_dense_8"
-    exp_name = "validation"
-    df = convert_tb_data(f"{dir_path}/{exp_name}")
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Convert TensorBoard data to CSV.')
+    parser.add_argument('--log_dir', type=str, required=True,
+                        help='Root directory of the TensorBoard logs.')
+    parser.add_argument('--exp_name', type=str, default='validation',
+                        help='Experiment name subdirectory (e.g., "validation", "train").')
+    parser.add_argument('--output_csv', type=str, default='results/all.csv',
+                        help='Path to save the output CSV file.')
+    args = parser.parse_args()
+
+    df = convert_tb_data(f"{args.log_dir}/{args.exp_name}")
 
     print(df.head())
-    #save to csv
-    df.to_csv(f"results/all.csv", index=False)
+    # save to csv
+    df.to_csv(args.output_csv, index=False)
+    print(f"Data saved to {args.output_csv}")
